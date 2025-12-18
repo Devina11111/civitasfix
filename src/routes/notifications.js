@@ -5,34 +5,115 @@ const { authenticate } = require('../middleware/auth');
 const router = express.Router();
 const prisma = new PrismaClient();
 
-// Get user notifications
+// Get all notifications for current user
 router.get('/', authenticate, async (req, res) => {
     try {
-        const { limit = 20, unreadOnly } = req.query;
+        const { page = 1, limit = 20, unreadOnly = false } = req.query;
+        const skip = (page - 1) * limit;
 
         let where = { userId: req.user.id };
+        
         if (unreadOnly === 'true') {
             where.isRead = false;
         }
 
-        const notifications = await prisma.notification.findMany({
-            where,
-            include: {
-                user: {
-                    select: {
-                        id: true,
-                        name: true,
-                        email: true
-                    }
+        const [notifications, total, unreadCount] = await Promise.all([
+            prisma.notification.findMany({
+                where,
+                orderBy: {
+                    createdAt: 'desc'
+                },
+                skip,
+                take: parseInt(limit)
+            }),
+            prisma.notification.count({ where }),
+            prisma.notification.count({ 
+                where: { 
+                    userId: req.user.id,
+                    isRead: false 
                 }
+            })
+        ]);
+
+        res.json({
+            success: true,
+            notifications,
+            pagination: {
+                page: parseInt(page),
+                limit: parseInt(limit),
+                total,
+                pages: Math.ceil(total / limit)
             },
-            orderBy: {
-                createdAt: 'desc'
-            },
-            take: parseInt(limit)
+            unreadCount
+        });
+    } catch (error) {
+        console.error('Get notifications error:', error);
+        res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+});
+
+// Get unread notifications count
+router.get('/unread-count', authenticate, async (req, res) => {
+    try {
+        const count = await prisma.notification.count({
+            where: {
+                userId: req.user.id,
+                isRead: false
+            }
         });
 
-        // Get unread count
+        res.json({
+            success: true,
+            count
+        });
+    } catch (error) {
+        console.error('Get unread count error:', error);
+        res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+});
+
+// Mark notification as read
+router.patch('/:id/read', authenticate, async (req, res) => {
+    try {
+        const notificationId = parseInt(req.params.id);
+
+        const notification = await prisma.notification.findFirst({
+            where: {
+                id: notificationId,
+                userId: req.user.id
+            }
+        });
+
+        if (!notification) {
+            return res.status(404).json({ success: false, message: 'Notifikasi tidak ditemukan' });
+        }
+
+        await prisma.notification.update({
+            where: { id: notificationId },
+            data: { isRead: true }
+        });
+
+        res.json({
+            success: true,
+            message: 'Notifikasi ditandai sebagai dibaca'
+        });
+    } catch (error) {
+        console.error('Mark notification as read error:', error);
+        res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+});
+
+// Mark all notifications as read
+router.post('/read-all', authenticate, async (req, res) => {
+    try {
+        await prisma.notification.updateMany({
+            where: { 
+                userId: req.user.id,
+                isRead: false
+            },
+            data: { isRead: true }
+        });
+
         const unreadCount = await prisma.notification.count({
             where: {
                 userId: req.user.id,
@@ -42,58 +123,41 @@ router.get('/', authenticate, async (req, res) => {
 
         res.json({
             success: true,
-            notifications,
+            message: 'Semua notifikasi ditandai sebagai dibaca',
             unreadCount
         });
     } catch (error) {
-        console.error('Get notifications error:', error);
+        console.error('Mark all notifications as read error:', error);
         res.status(500).json({ success: false, message: 'Internal server error' });
     }
 });
 
-// Mark notification as read
-router.patch('/:id/read', authenticate, async (req, res) => {
+// Delete notification
+router.delete('/:id', authenticate, async (req, res) => {
     try {
-        const notification = await prisma.notification.update({
+        const notificationId = parseInt(req.params.id);
+
+        const notification = await prisma.notification.findFirst({
             where: {
-                id: parseInt(req.params.id),
-                userId: req.user.id // Ensure user owns the notification
-            },
-            data: {
-                isRead: true
+                id: notificationId,
+                userId: req.user.id
             }
+        });
+
+        if (!notification) {
+            return res.status(404).json({ success: false, message: 'Notifikasi tidak ditemukan' });
+        }
+
+        await prisma.notification.delete({
+            where: { id: notificationId }
         });
 
         res.json({
             success: true,
-            message: 'Notifikasi ditandai sebagai telah dibaca',
-            notification
+            message: 'Notifikasi berhasil dihapus'
         });
     } catch (error) {
-        console.error('Mark notification as read error:', error);
-        res.status(500).json({ success: false, message: 'Internal server error' });
-    }
-});
-
-// Mark all as read
-router.post('/mark-all-read', authenticate, async (req, res) => {
-    try {
-        await prisma.notification.updateMany({
-            where: {
-                userId: req.user.id,
-                isRead: false
-            },
-            data: {
-                isRead: true
-            }
-        });
-
-        res.json({
-            success: true,
-            message: 'Semua notifikasi ditandai sebagai telah dibaca'
-        });
-    } catch (error) {
-        console.error('Mark all as read error:', error);
+        console.error('Delete notification error:', error);
         res.status(500).json({ success: false, message: 'Internal server error' });
     }
 });
