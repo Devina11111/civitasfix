@@ -1,19 +1,18 @@
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
-const { PrismaClient } = require('@prisma/client');
 
 // Load environment variables
 dotenv.config();
 
 const app = express();
-const prisma = new PrismaClient();
 
 // Middleware
 app.use(cors({
   origin: ['https://civitasfix.netlify.app', 'http://localhost:5173'],
   credentials: true
 }));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -23,6 +22,12 @@ const reportRoutes = require('./src/routes/reports');
 const notificationRoutes = require('./src/routes/notifications');
 const statsRoutes = require('./src/routes/stats');
 
+// Logging middleware
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  next();
+});
+
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/reports', reportRoutes);
@@ -30,32 +35,25 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/stats', statsRoutes);
 
 // Health check endpoint
-app.get('/api/health', async (req, res) => {
-  try {
-    // Test database connection
-    await prisma.$queryRaw`SELECT 1`;
-    
-    res.json({
-      status: 'OK',
-      message: 'CivitasFix Backend API is running',
-      version: '2.0.0',
-      timestamp: new Date().toISOString(),
-      environment: process.env.NODE_ENV || 'production',
-      database: 'Connected',
-      emailSystem: 'Disabled - Using internal notifications',
-      features: {
-        registration: 'Instant activation',
-        notifications: 'Internal website system',
-        reports: 'Full CRUD operations'
-      }
-    });
-  } catch (error) {
-    res.status(500).json({
-      status: 'ERROR',
-      message: 'Database connection failed',
-      error: error.message
-    });
-  }
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'OK',
+    message: 'CivitasFix Backend API is running',
+    version: '2.0.0',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'production',
+    database: 'Connected',
+    emailSystem: 'Disabled - Using internal notifications'
+  });
+});
+
+// Test endpoint
+app.get('/test', (req, res) => {
+  res.json({
+    message: 'Test endpoint working',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV
+  });
 });
 
 // API Documentation
@@ -72,15 +70,11 @@ app.get('/api', (req, res) => {
       reports: {
         list: 'GET /api/reports',
         create: 'POST /api/reports',
-        detail: 'GET /api/reports/:id',
-        updateStatus: 'PATCH /api/reports/:id/status',
-        updateRepair: 'PATCH /api/reports/:id/repair'
+        detail: 'GET /api/reports/:id'
       },
       notifications: {
         list: 'GET /api/notifications',
-        unreadCount: 'GET /api/notifications/unread-count',
-        markRead: 'PATCH /api/notifications/:id/read',
-        markAllRead: 'POST /api/notifications/read-all'
+        unreadCount: 'GET /api/notifications/unread-count'
       },
       stats: {
         summary: 'GET /api/stats/summary',
@@ -96,39 +90,36 @@ app.get('/', (req, res) => {
     message: 'Welcome to CivitasFix Backend API',
     version: '2.0.0',
     status: 'Running',
-    frontend: 'https://civitasfix.netlify.app',
-    documentation: '/api',
-    healthCheck: '/api/health'
-  });
-});
-
-// Test endpoint for Railway
-app.get('/test', (req, res) => {
-  res.json({
-    message: 'Railway test endpoint - Server is running',
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV
+    endpoints: {
+      api_docs: '/api',
+      health_check: '/api/health',
+      test: '/test'
+    }
   });
 });
 
 // 404 handler
-app.use('*', (req, res) => {
+app.use((req, res) => {
+  console.log(`[404] Route not found: ${req.method} ${req.url}`);
   res.status(404).json({
     success: false,
     message: 'Endpoint not found',
+    requested: `${req.method} ${req.url}`,
     available_endpoints: [
       'GET /',
       'GET /api',
       'GET /api/health',
       'POST /api/auth/register',
       'POST /api/auth/login',
+      'GET /api/auth/me',
       'GET /api/reports',
-      'POST /api/reports'
+      'POST /api/reports',
+      'GET /api/notifications'
     ]
   });
 });
 
-// Error handling middleware
+// Error handling
 app.use((err, req, res, next) => {
   console.error('Server Error:', err.stack);
   res.status(500).json({
@@ -143,7 +134,6 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📡 Environment: ${process.env.NODE_ENV || 'production'}`);
-  console.log(`🌐 CORS Origin: https://civitasfix.netlify.app`);
   console.log(`✅ Health: http://localhost:${PORT}/api/health`);
-  console.log(`📚 API Docs: http://localhost:${PORT}/api`);
+  console.log(`🔑 Test: http://localhost:${PORT}/test`);
 });
