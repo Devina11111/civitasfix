@@ -1,77 +1,129 @@
 const nodemailer = require('nodemailer');
 
-const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: process.env.SMTP_PORT,
-    secure: false,
+// Konfigurasi SMTP untuk Gmail
+const createTransporter = () => {
+  return nodemailer.createTransport({
+    service: 'gmail',
     auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS,
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS
     },
-});
+    debug: true, // Aktifkan debug
+    logger: true
+  });
+};
 
+// Test koneksi SMTP
+const testSMTPConnection = async () => {
+  try {
+    const transporter = createTransporter();
+    await transporter.verify();
+    console.log('✅ SMTP connection established successfully');
+    return true;
+  } catch (error) {
+    console.error('❌ SMTP connection failed:', error.message);
+    return false;
+  }
+};
+
+// Fungsi untuk mengirim email verifikasi
 const sendVerificationEmail = async (email, verificationCode) => {
+  try {
+    console.log(`📧 Attempting to send verification email to: ${email}`);
+    
+    const transporter = createTransporter();
+    
     const mailOptions = {
-        from: process.env.EMAIL_FROM,
-        to: email,
-        subject: 'Kode Verifikasi CivitasFix',
-        html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <div style="background-color: #10b981; padding: 20px; text-align: center;">
-          <h1 style="color: white; margin: 0;">CivitasFix</h1>
-        </div>
-        <div style="padding: 30px; background-color: #f9fafb;">
-          <h2 style="color: #374151;">Verifikasi Email Anda</h2>
-          <p style="color: #6b7280;">Gunakan kode berikut untuk verifikasi akun CivitasFix Anda:</p>
-          <div style="background-color: #ffffff; border: 2px dashed #d1d5db; padding: 20px; text-align: center; margin: 20px 0;">
-            <span style="font-size: 32px; font-weight: bold; letter-spacing: 5px; color: #10b981;">${verificationCode}</span>
+      from: `"CivitasFix" <${process.env.SMTP_USER}>`,
+      to: email,
+      subject: 'Kode Verifikasi CivitasFix',
+      text: `Kode verifikasi Anda: ${verificationCode}`,
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Verifikasi Email</title>
+          <style>
+            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; }
+            .header { background-color: #10b981; color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0; }
+            .content { background-color: #f9fafb; padding: 30px; border-radius: 0 0 10px 10px; }
+            .code { font-size: 32px; font-weight: bold; letter-spacing: 10px; text-align: center; color: #10b981; padding: 20px; background: white; border: 2px dashed #d1d5db; margin: 20px 0; }
+            .footer { text-align: center; margin-top: 30px; color: #6b7280; font-size: 12px; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h1>CivitasFix</h1>
+            <p>Sistem Laporan Kerusakan Kampus</p>
           </div>
-          <p style="color: #6b7280; font-size: 14px;">Kode ini berlaku selama 15 menit. Jangan bagikan kode ini kepada siapapun.</p>
-          <p style="color: #6b7280; font-size: 14px;">Jika Anda tidak meminta kode verifikasi, abaikan email ini.</p>
-        </div>
-        <div style="background-color: #f3f4f6; padding: 20px; text-align: center; color: #6b7280; font-size: 12px;">
-          <p>&copy; ${new Date().getFullYear()} CivitasFix. Semua hak dilindungi.</p>
-        </div>
-      </div>
-    `,
+          <div class="content">
+            <h2>Verifikasi Email Anda</h2>
+            <p>Halo,</p>
+            <p>Terima kasih telah mendaftar di CivitasFix. Gunakan kode verifikasi berikut untuk melengkapi pendaftaran:</p>
+            <div class="code">${verificationCode}</div>
+            <p>Kode ini berlaku selama 15 menit.</p>
+            <p><strong>Jangan bagikan kode ini kepada siapapun.</strong></p>
+            <p>Jika Anda tidak merasa mendaftar, abaikan email ini.</p>
+            <p>Salam,<br>Tim CivitasFix</p>
+          </div>
+          <div class="footer">
+            <p>&copy; ${new Date().getFullYear()} CivitasFix. Semua hak dilindungi.</p>
+          </div>
+        </body>
+        </html>
+      `
     };
 
-    return transporter.sendMail(mailOptions);
+    const info = await transporter.sendMail(mailOptions);
+    console.log(`✅ Verification email sent to ${email}:`, info.messageId);
+    return { success: true, messageId: info.messageId };
+  } catch (error) {
+    console.error(`❌ Failed to send verification email to ${email}:`, error);
+    return { success: false, error: error.message };
+  }
 };
 
+// Fungsi untuk mengirim email notifikasi
 const sendNotificationEmail = async (email, title, message, reportId = null) => {
-    const reportLink = reportId
-        ? `${process.env.FRONTEND_URL}/reports/${reportId}`
-        : `${process.env.FRONTEND_URL}/dashboard`;
-
+  try {
+    const transporter = createTransporter();
+    
     const mailOptions = {
-        from: process.env.EMAIL_FROM,
-        to: email,
-        subject: `CivitasFix: ${title}`,
-        html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <div style="background-color: #10b981; padding: 20px; text-align: center;">
-          <h1 style="color: white; margin: 0;">CivitasFix</h1>
-        </div>
-        <div style="padding: 30px; background-color: #f9fafb;">
-          <h2 style="color: #374151;">${title}</h2>
-          <div style="background-color: #ffffff; border-left: 4px solid #10b981; padding: 15px; margin: 20px 0;">
-            <p style="color: #374151; margin: 0;">${message}</p>
+      from: `"CivitasFix" <${process.env.SMTP_USER}>`,
+      to: email,
+      subject: `CivitasFix: ${title}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <div style="background-color: #10b981; padding: 20px; text-align: center; color: white;">
+            <h1>CivitasFix</h1>
           </div>
-          ${reportId ? `
-          <a href="${reportLink}" style="display: inline-block; background-color: #10b981; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; margin-top: 10px;">
-            Lihat Detail Laporan
-          </a>
-          ` : ''}
+          <div style="padding: 30px; background-color: #f9fafb;">
+            <h2>${title}</h2>
+            <p>${message}</p>
+            ${reportId ? `<p>ID Laporan: ${reportId}</p>` : ''}
+            <p style="margin-top: 30px; color: #666;">
+              Login ke akun Anda untuk melihat detail lengkap.
+            </p>
+          </div>
+          <div style="text-align: center; padding: 20px; color: #999; font-size: 12px;">
+            <p>&copy; ${new Date().getFullYear()} CivitasFix</p>
+          </div>
         </div>
-        <div style="background-color: #f3f4f6; padding: 20px; text-align: center; color: #6b7280; font-size: 12px;">
-          <p>&copy; ${new Date().getFullYear()} CivitasFix. Semua hak dilindungi.</p>
-        </div>
-      </div>
-    `,
+      `
     };
 
-    return transporter.sendMail(mailOptions);
+    const info = await transporter.sendMail(mailOptions);
+    return { success: true, messageId: info.messageId };
+  } catch (error) {
+    console.error(`Failed to send notification email to ${email}:`, error);
+    return { success: false, error: error.message };
+  }
 };
 
-module.exports = { sendVerificationEmail, sendNotificationEmail };
+module.exports = { 
+  sendVerificationEmail, 
+  sendNotificationEmail,
+  testSMTPConnection 
+};
