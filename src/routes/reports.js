@@ -1,7 +1,6 @@
 const express = require('express');
 const { PrismaClient } = require('@prisma/client');
 const { authenticate, authorize } = require('../middleware/auth');
-const { sendNotificationEmail } = require('../utils/email');
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -152,6 +151,37 @@ router.post('/', authenticate, authorize('STUDENT'), async (req, res) => {
             }
         });
 
+        // Buat notifikasi untuk user
+        await prisma.notification.create({
+            data: {
+                userId: req.user.id,
+                title: 'Laporan Dibuat',
+                message: `Laporan "${title}" berhasil dibuat dan sedang menunggu konfirmasi.`,
+                type: 'SUCCESS',
+                link: `/reports/${report.id}`
+            }
+        });
+
+        // Buat notifikasi untuk dosen (jika ada)
+        if (req.user.role === 'LECTURER' || req.user.role === 'ADMIN') {
+            const lecturers = await prisma.user.findMany({
+                where: { role: 'LECTURER' },
+                select: { id: true }
+            });
+
+            for (const lecturer of lecturers) {
+                await prisma.notification.create({
+                    data: {
+                        userId: lecturer.id,
+                        title: 'Laporan Baru',
+                        message: `Ada laporan baru: "${title}" di ${location}`,
+                        type: 'INFO',
+                        link: `/reports/${report.id}`
+                    }
+                });
+            }
+        }
+
         res.status(201).json({
             success: true,
             message: 'Laporan berhasil dibuat',
@@ -163,8 +193,8 @@ router.post('/', authenticate, authorize('STUDENT'), async (req, res) => {
     }
 });
 
-// Update report status (Lecturer only)
-router.patch('/:id/status', authenticate, authorize('LECTURER'), async (req, res) => {
+// Update report status (Lecturer/Admin only)
+router.patch('/:id/status', authenticate, authorize('LECTURER', 'ADMIN'), async (req, res) => {
     try {
         const { status, notes, estimatedCost } = req.body;
         const reportId = parseInt(req.params.id);
@@ -198,28 +228,38 @@ router.patch('/:id/status', authenticate, authorize('LECTURER'), async (req, res
                 }
             });
 
-            // Create notification
+            // Create notification for student
             await prisma.notification.create({
                 data: {
                     userId: report.userId,
                     title: 'Laporan Dikonfirmasi',
                     message: `Laporan "${report.title}" telah dikonfirmasi oleh dosen dan akan segera ditangani.`,
                     type: 'SUCCESS',
-                    reportId
+                    reportId,
+                    link: `/reports/${report.id}`
                 }
             });
+        }
 
-            // Send email notification
-            try {
-                await sendNotificationEmail(
-                    report.user.email,
-                    'Laporan Dikonfirmasi',
-                    `Laporan Anda "${report.title}" telah dikonfirmasi oleh dosen dan akan segera ditangani.`,
-                    reportId
-                );
-            } catch (emailError) {
-                console.error('Email notification error:', emailError);
-            }
+        // Create notification for status change
+        const statusMessages = {
+            'CONFIRMED': 'dikonfirmasi',
+            'IN_PROGRESS': 'sedang dalam proses',
+            'COMPLETED': 'telah selesai',
+            'REJECTED': 'ditolak'
+        };
+
+        if (statusMessages[status]) {
+            await prisma.notification.create({
+                data: {
+                    userId: report.userId,
+                    title: 'Status Laporan Diperbarui',
+                    message: `Status laporan "${report.title}" ${statusMessages[status]}.`,
+                    type: 'INFO',
+                    reportId,
+                    link: `/reports/${report.id}`
+                }
+            });
         }
 
         res.json({
@@ -234,7 +274,7 @@ router.patch('/:id/status', authenticate, authorize('LECTURER'), async (req, res
 });
 
 // Update repair (Lecturer only)
-router.patch('/:id/repair', authenticate, authorize('LECTURER'), async (req, res) => {
+router.patch('/:id/repair', authenticate, authorize('LECTURER', 'ADMIN'), async (req, res) => {
     try {
         const { status, notes, actualCost } = req.body;
         const reportId = parseInt(req.params.id);
@@ -292,23 +332,10 @@ router.patch('/:id/repair', authenticate, authorize('LECTURER'), async (req, res
                     title: 'Status Perbaikan Diperbarui',
                     message: `Perbaikan untuk laporan "${report.title}" ${statusMessages[status]}.`,
                     type: 'INFO',
-                    reportId
+                    reportId,
+                    link: `/reports/${report.id}`
                 }
             });
-
-            // Send email notification for completion
-            if (status === 'COMPLETED') {
-                try {
-                    await sendNotificationEmail(
-                        report.user.email,
-                        'Perbaikan Selesai',
-                        `Laporan Anda "${report.title}" telah selesai diperbaiki.`,
-                        reportId
-                    );
-                } catch (emailError) {
-                    console.error('Email notification error:', emailError);
-                }
-            }
         }
 
         res.json({
@@ -322,36 +349,79 @@ router.patch('/:id/repair', authenticate, authorize('LECTURER'), async (req, res
     }
 });
 
-// Get latest 10 reports for dashboard
-router.get('/dashboard/latest', authenticate, async (req, res) => {
+// Get notifications for current user
+router.get('/:id/notifications', authenticate, async (req, res) => {
     try {
-        let where = {};
-
-        if (req.user.role === 'STUDENT') {
-            where.userId = req.user.id;
-        }
-
-        const reports = await prisma.report.findMany({
-            where,
-            include: {
-                user: {
-                    select: {
-                        id: true,
-                        name: true,
-                        email: true,
-                        role: true
-                    }
-                }
+        const { limit = 20 } = req.query;
+        
+        const notifications = await prisma.notification.findMany({
+            where: { 
+                userId: req.user.id 
             },
             orderBy: {
                 createdAt: 'desc'
             },
-            take: 10
+            take: parseInt(limit)
         });
 
-        res.json({ success: true, reports });
+        res.json({
+            success: true,
+            notifications
+        });
     } catch (error) {
-        console.error('Get latest reports error:', error);
+        console.error('Get notifications error:', error);
+        res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+});
+
+// Mark notification as read
+router.patch('/notifications/:id/read', authenticate, async (req, res) => {
+    try {
+        const notificationId = parseInt(req.params.id);
+
+        const notification = await prisma.notification.findFirst({
+            where: {
+                id: notificationId,
+                userId: req.user.id
+            }
+        });
+
+        if (!notification) {
+            return res.status(404).json({ success: false, message: 'Notifikasi tidak ditemukan' });
+        }
+
+        await prisma.notification.update({
+            where: { id: notificationId },
+            data: { isRead: true }
+        });
+
+        res.json({
+            success: true,
+            message: 'Notifikasi ditandai sebagai dibaca'
+        });
+    } catch (error) {
+        console.error('Mark notification as read error:', error);
+        res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+});
+
+// Mark all notifications as read
+router.post('/notifications/read-all', authenticate, async (req, res) => {
+    try {
+        await prisma.notification.updateMany({
+            where: { 
+                userId: req.user.id,
+                isRead: false
+            },
+            data: { isRead: true }
+        });
+
+        res.json({
+            success: true,
+            message: 'Semua notifikasi ditandai sebagai dibaca'
+        });
+    } catch (error) {
+        console.error('Mark all notifications as read error:', error);
         res.status(500).json({ success: false, message: 'Internal server error' });
     }
 });
