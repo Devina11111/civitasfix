@@ -15,53 +15,189 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Routes
-app.use('/api/auth', require('./routes/auth'));
-app.use('/api/reports', require('./routes/reports'));
-app.use('/api/users', require('./routes/users'));
-app.use('/api/notifications', require('./routes/notifications'));
-app.use('/api/stats', require('./routes/stats'));
+// Simple in-memory routes for now (NO DATABASE NEEDED)
+// Authentication routes
+app.post('/api/auth/register', (req, res) => {
+  const { email, password, name, role } = req.body;
+  
+  if (!email || !password || !name) {
+    return res.status(400).json({
+      success: false,
+      message: 'Email, password, dan nama harus diisi'
+    });
+  }
+  
+  // Simulate email sending
+  const verificationCode = Math.floor(100000 + Math.random() * 900000);
+  
+  res.json({
+    success: true,
+    message: 'Registrasi berhasil! Kode verifikasi: ' + verificationCode,
+    userId: Date.now(),
+    verificationCode: verificationCode.toString(),
+    note: 'Ini adalah simulasi. Di production, kode akan dikirim via email.'
+  });
+});
 
-// Health check
-app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'OK', 
-    message: 'CivitasFix Backend API',
-    version: '1.0.0',
-    timestamp: new Date(),
-    endpoints: {
-      auth: '/api/auth',
-      reports: '/api/reports',
-      users: '/api/users',
-      notifications: '/api/notifications',
-      stats: '/api/stats'
+app.post('/api/auth/login', (req, res) => {
+  const { email, password } = req.body;
+  
+  // Demo accounts
+  const demoAccounts = {
+    'mahasiswa@demo.com': { password: 'demo123', role: 'STUDENT', name: 'Mahasiswa Demo' },
+    'dosen@demo.com': { password: 'demo123', role: 'LECTURER', name: 'Dosen Demo' },
+    'admin@demo.com': { password: 'demo123', role: 'ADMIN', name: 'Admin Demo' }
+  };
+  
+  if (demoAccounts[email] && demoAccounts[email].password === password) {
+    const user = demoAccounts[email];
+    const token = `demo-token-${Date.now()}`;
+    
+    return res.json({
+      success: true,
+      message: 'Login berhasil (Demo Account)',
+      token,
+      user: {
+        id: Date.now(),
+        email,
+        name: user.name,
+        role: user.role,
+        isVerified: true
+      }
+    });
+  }
+  
+  res.status(401).json({
+    success: false,
+    message: 'Email atau password salah'
+  });
+});
+
+app.post('/api/auth/verify', (req, res) => {
+  const { email, verificationCode } = req.body;
+  
+  res.json({
+    success: true,
+    message: 'Email berhasil diverifikasi!',
+    token: `verified-${Date.now()}`,
+    user: {
+      id: Date.now(),
+      email,
+      name: 'User Verified',
+      role: 'STUDENT',
+      isVerified: true
     }
   });
 });
 
-// Root endpoint
-app.get('/', (req, res) => {
+// Reports routes
+app.get('/api/reports', (req, res) => {
+  const reports = [
+    {
+      id: 1,
+      title: 'Kursi Rusak di Lab Komputer',
+      description: 'Kursi mengalami kerusakan pada bagian sandaran',
+      location: 'Gedung A, Lantai 2, Ruang 201',
+      status: 'PENDING',
+      category: 'FURNITURE',
+      priority: 'MEDIUM',
+      createdAt: '2024-12-15T10:30:00Z'
+    },
+    {
+      id: 2,
+      title: 'AC Tidak Dingin',
+      description: 'AC di ruang dosen tidak mengeluarkan udara dingin',
+      location: 'Gedung B, Ruang 102',
+      status: 'IN_PROGRESS',
+      category: 'ELECTRONIC',
+      priority: 'HIGH',
+      createdAt: '2024-12-14T14:20:00Z'
+    }
+  ];
+  
   res.json({
-    message: 'CivitasFix Backend API',
+    success: true,
+    reports,
+    pagination: {
+      page: 1,
+      limit: 10,
+      total: 2,
+      pages: 1
+    }
+  });
+});
+
+app.post('/api/reports', (req, res) => {
+  const report = {
+    id: Date.now(),
+    ...req.body,
+    status: 'PENDING',
+    createdAt: new Date().toISOString()
+  };
+  
+  res.json({
+    success: true,
+    message: 'Laporan berhasil dibuat',
+    report
+  });
+});
+
+// Stats routes
+app.get('/api/stats/weekly', (req, res) => {
+  res.json({
+    success: true,
+    stats: {
+      byStatus: { PENDING: 5, IN_PROGRESS: 3, COMPLETED: 12 },
+      byCategory: { FURNITURE: 8, ELECTRONIC: 7, BUILDING: 3, OTHER: 2 },
+      dailyCounts: [
+        { date: '2024-12-15', count: 3 },
+        { date: '2024-12-16', count: 5 },
+        { date: '2024-12-17', count: 4 }
+      ],
+      totals: { all: 20, pending: 5, completed: 12 }
+    }
+  });
+});
+
+app.get('/api/stats/summary', (req, res) => {
+  res.json({
+    success: true,
+    summary: {
+      total: 20,
+      pending: 5,
+      inProgress: 3,
+      completed: 12,
+      weekly: 8,
+      monthly: 20
+    }
+  });
+});
+
+// Users routes
+app.get('/api/users/profile', (req, res) => {
+  res.json({
+    success: true,
+    user: {
+      id: 1,
+      email: 'demo@example.com',
+      name: 'Demo User',
+      role: 'STUDENT',
+      nim: '12345678',
+      isVerified: true,
+      createdAt: '2024-12-01T00:00:00Z'
+    }
+  });
+});
+
+// Health check - IMPORTANT FOR RAILWAY
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'OK',
+    message: 'CivitasFix Backend API is running',
     version: '1.0.0',
-    status: 'Running',
-    documentation: 'Available endpoints:',
-    endpoints: [
-      'GET  /api/health',
-      'GET  /api',
-      'POST /api/auth/register',
-      'POST /api/auth/login',
-      'POST /api/auth/verify',
-      'GET  /api/auth/me',
-      'GET  /api/reports',
-      'POST /api/reports',
-      'GET  /api/reports/:id',
-      'PATCH /api/reports/:id/status',
-      'GET  /api/stats/weekly',
-      'GET  /api/users/profile'
-    ],
-    frontend: process.env.FRONTEND_URL || 'Not configured',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development',
+    database: 'Connected (Simulated)'
   });
 });
 
@@ -74,46 +210,53 @@ app.get('/api', (req, res) => {
       auth: {
         register: 'POST /api/auth/register',
         login: 'POST /api/auth/login',
-        verify: 'POST /api/auth/verify',
-        resendVerification: 'POST /api/auth/resend-verification',
-        me: 'GET /api/auth/me'
+        verify: 'POST /api/auth/verify'
       },
       reports: {
-        list: 'GET /api/reports?page=1&limit=10',
-        create: 'POST /api/reports',
-        detail: 'GET /api/reports/:id',
-        updateStatus: 'PATCH /api/reports/:id/status',
-        updateRepair: 'PATCH /api/reports/:id/repair',
-        latest: 'GET /api/reports/dashboard/latest'
-      },
-      users: {
-        profile: 'GET /api/users/profile',
-        updateProfile: 'PUT /api/users/profile',
-        changePassword: 'POST /api/users/change-password',
-        lecturers: 'GET /api/users/lecturers'
-      },
-      notifications: {
-        list: 'GET /api/notifications',
-        markRead: 'PATCH /api/notifications/:id/read',
-        markAllRead: 'POST /api/notifications/mark-all-read'
+        list: 'GET /api/reports',
+        create: 'POST /api/reports'
       },
       stats: {
         weekly: 'GET /api/stats/weekly',
         summary: 'GET /api/stats/summary'
       },
+      users: {
+        profile: 'GET /api/users/profile'
+      },
       health: 'GET /api/health'
     },
-    note: 'All POST/PATCH requests require JSON body',
-    authentication: 'Bearer token required for protected endpoints'
+    demo_accounts: {
+      mahasiswa: 'mahasiswa@demo.com / demo123',
+      dosen: 'dosen@demo.com / demo123',
+      admin: 'admin@demo.com / demo123'
+    }
   });
 });
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error('Server Error:', err.stack);
-  res.status(err.status || 500).json({
-    success: false,
-    message: err.message || 'Internal server error'
+// Root endpoint
+app.get('/', (req, res) => {
+  res.json({
+    message: 'Welcome to CivitasFix Backend API',
+    version: '1.0.0',
+    status: 'Running',
+    endpoints: {
+      api_docs: '/api',
+      health_check: '/api/health',
+      demo_login: '/api/auth/login'
+    },
+    frontend_url: process.env.FRONTEND_URL || 'Not configured',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Test email endpoint
+app.get('/api/test-email', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Email system check',
+    status: 'SIMULATED - No real email sent in demo mode',
+    note: 'In production, emails are sent via SMTP',
+    demo_mode: true
   });
 });
 
@@ -123,15 +266,15 @@ app.use('*', (req, res) => {
     success: false,
     message: 'Endpoint not found',
     available_endpoints: [
-      'GET  /',
-      'GET  /api',
-      'GET  /api/health',
+      'GET /',
+      'GET /api',
+      'GET /api/health',
       'POST /api/auth/login',
       'POST /api/auth/register',
       'POST /api/auth/verify',
-      'GET  /api/reports',
+      'GET /api/reports',
       'POST /api/reports',
-      'GET  /api/users/profile'
+      'GET /api/stats/weekly'
     ]
   });
 });
@@ -140,8 +283,9 @@ const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📧 SMTP Configured: ${process.env.SMTP_USER ? 'YES' : 'NO'}`);
-  console.log(`🌐 Frontend URL: ${process.env.FRONTEND_URL || 'Not set'}`);
-  console.log(`📊 Database: ${process.env.DATABASE_URL ? 'Connected' : 'Not connected'}`);
-  console.log(`🔗 API Documentation: http://localhost:${PORT}/api`);
+  console.log(`📡 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🔗 Frontend URL: ${process.env.FRONTEND_URL || 'Not set'}`);
+  console.log(`✅ Health check: http://localhost:${PORT}/api/health`);
+  console.log(`📚 API Docs: http://localhost:${PORT}/api`);
+  console.log(`🏠 Home: http://localhost:${PORT}/`);
 });
