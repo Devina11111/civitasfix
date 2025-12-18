@@ -1,14 +1,25 @@
 const express = require('express');
 const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
-const { generateToken } = require('../utils/auth');
+const jwt = require('jsonwebtoken');
 
 const router = express.Router();
 const prisma = new PrismaClient();
 
+// Generate JWT token
+const generateToken = (userId) => {
+  return jwt.sign(
+    { userId },
+    process.env.JWT_SECRET || 'civitasfix-secret-key',
+    { expiresIn: '7d' }
+  );
+};
+
 // Register endpoint - Tanpa verifikasi email
 router.post('/register', async (req, res) => {
   try {
+    console.log('Register request:', req.body);
+    
     const { email, password, name, role, nim, nidn } = req.body;
 
     // Validation
@@ -94,6 +105,8 @@ router.post('/register', async (req, res) => {
 // Login endpoint
 router.post('/login', async (req, res) => {
   try {
+    console.log('Login request:', req.body.email);
+    
     const { email, password } = req.body;
 
     if (!email || !password) {
@@ -163,7 +176,7 @@ router.get('/me', async (req, res) => {
     }
 
     // Verify token
-    const decoded = require('jsonwebtoken').verify(token, process.env.JWT_SECRET || 'your-secret-key');
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'civitasfix-secret-key');
     const userId = decoded.userId;
 
     // Database user
@@ -194,68 +207,11 @@ router.get('/me', async (req, res) => {
     });
   } catch (error) {
     console.error('Get user error:', error);
-    res.status(500).json({ 
+    res.status(401).json({ 
       success: false, 
       message: 'Token tidak valid' 
     });
   }
-});
-
-// Demo accounts (untuk testing)
-router.post('/demo/login', async (req, res) => {
-  const { type = 'student' } = req.body;
-  
-  let demoUser;
-  
-  switch(type) {
-    case 'student':
-      demoUser = {
-        id: 1001,
-        email: 'mahasiswa@demo.com',
-        name: 'Mahasiswa Demo',
-        role: 'STUDENT',
-        nim: '12345678',
-        isVerified: true
-      };
-      break;
-    case 'lecturer':
-      demoUser = {
-        id: 1002,
-        email: 'dosen@demo.com',
-        name: 'Dosen Demo',
-        role: 'LECTURER',
-        nidn: '87654321',
-        isVerified: true
-      };
-      break;
-    case 'admin':
-      demoUser = {
-        id: 1003,
-        email: 'admin@demo.com',
-        name: 'Admin Demo',
-        role: 'ADMIN',
-        isVerified: true
-      };
-      break;
-    default:
-      return res.status(400).json({
-        success: false,
-        message: 'Type must be student, lecturer, or admin'
-      });
-  }
-
-  const token = require('jsonwebtoken').sign(
-    { userId: demoUser.id },
-    process.env.JWT_SECRET || 'your-secret-key',
-    { expiresIn: '7d' }
-  );
-
-  res.json({
-    success: true,
-    message: 'Login demo berhasil',
-    token,
-    user: demoUser
-  });
 });
 
 module.exports = router;
