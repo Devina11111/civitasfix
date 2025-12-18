@@ -15,13 +15,14 @@ model User {
   role              Role      @default(STUDENT)
   nim               String?
   nidn              String?
-  isVerified        Boolean   @default(true)  // Langsung true tanpa verifikasi
+  isVerified        Boolean   @default(true)
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
   
   reports           Report[]
-  repairs           Repair[]
   notifications     Notification[]
+  
+  @@map("users")
 }
 
 model Report {
@@ -38,31 +39,10 @@ model Report {
   
   userId            Int
   user              User      @relation(fields: [userId], references: [id])
-  repairs           Repair[]
-  notifications     Notification[]
   
   @@index([userId])
   @@index([status])
-  @@index([createdAt])
-}
-
-model Repair {
-  id                Int       @id @default(autoincrement())
-  notes             String?
-  status            RepairStatus @default(CONFIRMED)
-  estimatedCost     Float?
-  actualCost        Float?
-  repairDate        DateTime?
-  completedAt       DateTime?
-  createdAt         DateTime  @default(now())
-  
-  reportId          Int
-  report            Report    @relation(fields: [reportId], references: [id])
-  lecturerId        Int
-  lecturer          User      @relation(fields: [lecturerId], references: [id])
-  
-  @@index([reportId])
-  @@index([lecturerId])
+  @@map("reports")
 }
 
 model Notification {
@@ -71,7 +51,7 @@ model Notification {
   message           String
   type              NotificationType @default(INFO)
   isRead            Boolean   @default(false)
-  link              String?   // URL atau route untuk navigasi
+  link              String?
   createdAt         DateTime  @default(now())
   
   userId            Int
@@ -80,7 +60,7 @@ model Notification {
   
   @@index([userId])
   @@index([isRead])
-  @@index([createdAt])
+  @@map("notifications")
 }
 
 enum Role {
@@ -112,18 +92,9 @@ enum Priority {
   URGENT
 }
 
-enum RepairStatus {
-  CONFIRMED
-  IN_PROGRESS
-  WAITING_PARTS
-  COMPLETED
-  CANCELLED
-}
-
 enum NotificationType {
   INFO
   WARNING
   SUCCESS
   ERROR
-  SYSTEM
 }
