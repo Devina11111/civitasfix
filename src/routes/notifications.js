@@ -1,9 +1,32 @@
 const express = require('express');
 const { PrismaClient } = require('@prisma/client');
-const { authenticate } = require('../middleware/auth');
+const jwt = require('jsonwebtoken');
 
 const router = express.Router();
 const prisma = new PrismaClient();
+
+// Middleware untuk autentikasi
+const authenticate = async (req, res, next) => {
+  try {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    
+    if (!token) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Token tidak ditemukan' 
+      });
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'civitasfix-secret-key');
+    req.userId = decoded.userId;
+    next();
+  } catch (error) {
+    res.status(401).json({ 
+      success: false, 
+      message: 'Token tidak valid' 
+    });
+  }
+};
 
 // Get all notifications for current user
 router.get('/', authenticate, async (req, res) => {
@@ -11,7 +34,7 @@ router.get('/', authenticate, async (req, res) => {
         const { page = 1, limit = 20, unreadOnly = false } = req.query;
         const skip = (page - 1) * limit;
 
-        let where = { userId: req.user.id };
+        let where = { userId: req.userId };
         
         if (unreadOnly === 'true') {
             where.isRead = false;
@@ -29,7 +52,7 @@ router.get('/', authenticate, async (req, res) => {
             prisma.notification.count({ where }),
             prisma.notification.count({ 
                 where: { 
-                    userId: req.user.id,
+                    userId: req.userId,
                     isRead: false 
                 }
             })
@@ -57,7 +80,7 @@ router.get('/unread-count', authenticate, async (req, res) => {
     try {
         const count = await prisma.notification.count({
             where: {
-                userId: req.user.id,
+                userId: req.userId,
                 isRead: false
             }
         });
@@ -80,7 +103,7 @@ router.patch('/:id/read', authenticate, async (req, res) => {
         const notification = await prisma.notification.findFirst({
             where: {
                 id: notificationId,
-                userId: req.user.id
+                userId: req.userId
             }
         });
 
@@ -108,7 +131,7 @@ router.post('/read-all', authenticate, async (req, res) => {
     try {
         await prisma.notification.updateMany({
             where: { 
-                userId: req.user.id,
+                userId: req.userId,
                 isRead: false
             },
             data: { isRead: true }
@@ -116,7 +139,7 @@ router.post('/read-all', authenticate, async (req, res) => {
 
         const unreadCount = await prisma.notification.count({
             where: {
-                userId: req.user.id,
+                userId: req.userId,
                 isRead: false
             }
         });
@@ -128,36 +151,6 @@ router.post('/read-all', authenticate, async (req, res) => {
         });
     } catch (error) {
         console.error('Mark all notifications as read error:', error);
-        res.status(500).json({ success: false, message: 'Internal server error' });
-    }
-});
-
-// Delete notification
-router.delete('/:id', authenticate, async (req, res) => {
-    try {
-        const notificationId = parseInt(req.params.id);
-
-        const notification = await prisma.notification.findFirst({
-            where: {
-                id: notificationId,
-                userId: req.user.id
-            }
-        });
-
-        if (!notification) {
-            return res.status(404).json({ success: false, message: 'Notifikasi tidak ditemukan' });
-        }
-
-        await prisma.notification.delete({
-            where: { id: notificationId }
-        });
-
-        res.json({
-            success: true,
-            message: 'Notifikasi berhasil dihapus'
-        });
-    } catch (error) {
-        console.error('Delete notification error:', error);
         res.status(500).json({ success: false, message: 'Internal server error' });
     }
 });
