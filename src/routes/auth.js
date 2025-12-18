@@ -6,19 +6,26 @@ const jwt = require('jsonwebtoken');
 const router = express.Router();
 const prisma = new PrismaClient();
 
-// Generate JWT token
-const generateToken = (userId) => {
-  return jwt.sign(
-    { userId },
-    process.env.JWT_SECRET || 'civitasfix-secret-key',
-    { expiresIn: '7d' }
-  );
-};
+// Middleware untuk logging
+router.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  next();
+});
 
-// Register endpoint - Tanpa verifikasi email
+// Test endpoint untuk Railway
+router.get('/test', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Auth endpoint working',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV
+  });
+});
+
+// Register endpoint
 router.post('/register', async (req, res) => {
   try {
-    console.log('Register request:', req.body);
+    console.log('Register request body:', req.body);
     
     const { email, password, name, role, nim, nidn } = req.body;
 
@@ -34,6 +41,15 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ 
         success: false, 
         message: 'Password minimal 6 karakter' 
+      });
+    }
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Format email tidak valid'
       });
     }
 
@@ -61,42 +77,60 @@ router.post('/register', async (req, res) => {
         role: role || 'STUDENT',
         nim: role === 'STUDENT' ? nim : null,
         nidn: role === 'LECTURER' ? nidn : null,
-        isVerified: true // Langsung verified tanpa email
+        isVerified: true
       }
     });
 
-    // Buat notifikasi selamat datang
+    // Create welcome notification
     await prisma.notification.create({
       data: {
         userId: user.id,
         title: 'Selamat Datang!',
-        message: 'Akun Anda berhasil dibuat. Selamat menggunakan CivitasFix!',
+        message: `Halo ${name}, akun Anda berhasil dibuat. Selamat menggunakan CivitasFix!`,
         type: 'SUCCESS'
       }
     });
 
-    // Generate token
-    const token = generateToken(user.id);
+    // Generate JWT token
+    const token = jwt.sign(
+      { userId: user.id },
+      process.env.JWT_SECRET || 'civitasfix-upn-secret-key',
+      { expiresIn: '7d' }
+    );
+
+    // Return user data without password
+    const userResponse = {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      nim: user.nim,
+      nidn: user.nidn,
+      isVerified: true,
+      createdAt: user.createdAt
+    };
 
     res.status(201).json({
       success: true,
       message: 'Registrasi berhasil! Akun Anda sudah aktif.',
       token,
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        role: user.role,
-        nim: user.nim,
-        nidn: user.nidn,
-        isVerified: true
-      }
+      user: userResponse
     });
+
   } catch (error) {
     console.error('Registration error:', error);
+    
+    // Handle specific Prisma errors
+    if (error.code === 'P2002') {
+      return res.status(400).json({
+        success: false,
+        message: 'Email atau NPM/NIDN sudah terdaftar'
+      });
+    }
+
     res.status(500).json({ 
       success: false, 
-      message: 'Terjadi kesalahan server',
+      message: 'Terjadi kesalahan server. Silakan coba lagi.',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
@@ -105,7 +139,7 @@ router.post('/register', async (req, res) => {
 // Login endpoint
 router.post('/login', async (req, res) => {
   try {
-    console.log('Login request:', req.body.email);
+    console.log('Login attempt for email:', req.body.email);
     
     const { email, password } = req.body;
 
@@ -116,13 +150,14 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    // Cari user
+    // Find user
     const user = await prisma.user.findUnique({ 
       where: { email } 
     });
 
     if (!user) {
-      return res.status(400).json({ 
+      console.log('User not found for email:', email);
+      return res.status(401).json({ 
         success: false, 
         message: 'Email atau password salah' 
       });
@@ -131,34 +166,46 @@ router.post('/login', async (req, res) => {
     // Check password
     const isValidPassword = await bcrypt.compare(password, user.password);
     if (!isValidPassword) {
-      return res.status(400).json({ 
+      console.log('Invalid password for email:', email);
+      return res.status(401).json({ 
         success: false, 
         message: 'Email atau password salah' 
       });
     }
 
-    // Generate token
-    const token = generateToken(user.id);
+    // Generate JWT token
+    const token = jwt.sign(
+      { userId: user.id },
+      process.env.JWT_SECRET || 'civitasfix-upn-secret-key',
+      { expiresIn: '7d' }
+    );
+
+    // Return user data without password
+    const userResponse = {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      nim: user.nim,
+      nidn: user.nidn,
+      isVerified: user.isVerified,
+      createdAt: user.createdAt
+    };
+
+    console.log('Login successful for user:', user.email);
 
     res.json({
       success: true,
       message: 'Login berhasil',
       token,
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        role: user.role,
-        nim: user.nim,
-        nidn: user.nidn,
-        isVerified: user.isVerified
-      }
+      user: userResponse
     });
+
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ 
       success: false, 
-      message: 'Terjadi kesalahan server' 
+      message: 'Terjadi kesalahan server. Silakan coba lagi.' 
     });
   }
 });
@@ -171,15 +218,24 @@ router.get('/me', async (req, res) => {
     if (!token) {
       return res.status(401).json({ 
         success: false, 
-        message: 'Token tidak ditemukan' 
+        message: 'Token tidak ditemukan. Silakan login kembali.' 
       });
     }
 
     // Verify token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'civitasfix-secret-key');
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET || 'civitasfix-upn-secret-key');
+    } catch (jwtError) {
+      return res.status(401).json({
+        success: false,
+        message: 'Token tidak valid. Silakan login kembali.'
+      });
+    }
+
     const userId = decoded.userId;
 
-    // Database user
+    // Find user in database
     const user = await prisma.user.findUnique({
       where: { id: userId },
       select: {
@@ -205,11 +261,12 @@ router.get('/me', async (req, res) => {
       success: true, 
       user 
     });
+
   } catch (error) {
     console.error('Get user error:', error);
-    res.status(401).json({ 
+    res.status(500).json({ 
       success: false, 
-      message: 'Token tidak valid' 
+      message: 'Terjadi kesalahan server' 
     });
   }
 });
