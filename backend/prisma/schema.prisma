@@ -1,0 +1,127 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                Int       @id @default(autoincrement())
+  email             String    @unique
+  password          String
+  name              String
+  role              Role      @default(STUDENT)
+  nim               String?
+  nidn              String?
+  isVerified        Boolean   @default(false)
+  verificationCode  String?
+  verificationExpires DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  
+  reports           Report[]
+  repairs           Repair[]
+  notifications     Notification[]
+}
+
+model Report {
+  id                Int       @id @default(autoincrement())
+  title             String
+  description       String
+  location          String
+  imageUrl          String?
+  category          Category  @default(FURNITURE)
+  status            Status    @default(PENDING)
+  priority          Priority  @default(MEDIUM)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  
+  userId            Int
+  user              User      @relation(fields: [userId], references: [id])
+  repairs           Repair[]
+  
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model Repair {
+  id                Int       @id @default(autoincrement())
+  notes             String?
+  status            RepairStatus @default(CONFIRMED)
+  estimatedCost     Float?
+  actualCost        Float?
+  repairDate        DateTime?
+  completedAt       DateTime?
+  createdAt         DateTime  @default(now())
+  
+  reportId          Int
+  report            Report    @relation(fields: [reportId], references: [id])
+  lecturerId        Int
+  lecturer          User      @relation(fields: [lecturerId], references: [id])
+  
+  @@index([reportId])
+  @@index([lecturerId])
+}
+
+model Notification {
+  id                Int       @id @default(autoincrement())
+  title             String
+  message           String
+  type              NotificationType @default(INFO)
+  isRead            Boolean   @default(false)
+  createdAt         DateTime  @default(now())
+  
+  userId            Int
+  user              User      @relation(fields: [userId], references: [id])
+  reportId          Int?
+  
+  @@index([userId])
+  @@index([isRead])
+}
+
+enum Role {
+  STUDENT
+  LECTURER
+  ADMIN
+}
+
+enum Category {
+  FURNITURE
+  ELECTRONIC
+  BUILDING
+  SANITARY
+  OTHER
+}
+
+enum Status {
+  PENDING
+  CONFIRMED
+  IN_PROGRESS
+  COMPLETED
+  REJECTED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum RepairStatus {
+  CONFIRMED
+  IN_PROGRESS
+  WAITING_PARTS
+  COMPLETED
+  CANCELLED
+}
+
+enum NotificationType {
+  INFO
+  WARNING
+  SUCCESS
+  ERROR
+}
