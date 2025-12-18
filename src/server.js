@@ -39,21 +39,78 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Root endpoint - FIX untuk "Cannot GET /"
+// Root endpoint
 app.get('/', (req, res) => {
   res.json({
     message: 'CivitasFix Backend API',
     version: '1.0.0',
     status: 'Running',
-    documentation: 'API endpoints available under /api',
+    documentation: 'Available endpoints:',
+    endpoints: [
+      'GET  /api/health',
+      'GET  /api',
+      'POST /api/auth/register',
+      'POST /api/auth/login',
+      'POST /api/auth/verify',
+      'GET  /api/auth/me',
+      'GET  /api/reports',
+      'POST /api/reports',
+      'GET  /api/reports/:id',
+      'PATCH /api/reports/:id/status',
+      'GET  /api/stats/weekly',
+      'GET  /api/users/profile'
+    ],
     frontend: process.env.FRONTEND_URL || 'Not configured',
     timestamp: new Date().toISOString()
   });
 });
 
+// API Documentation endpoint
+app.get('/api', (req, res) => {
+  res.json({
+    message: 'CivitasFix API Documentation',
+    version: '1.0.0',
+    endpoints: {
+      auth: {
+        register: 'POST /api/auth/register',
+        login: 'POST /api/auth/login',
+        verify: 'POST /api/auth/verify',
+        resendVerification: 'POST /api/auth/resend-verification',
+        me: 'GET /api/auth/me'
+      },
+      reports: {
+        list: 'GET /api/reports?page=1&limit=10',
+        create: 'POST /api/reports',
+        detail: 'GET /api/reports/:id',
+        updateStatus: 'PATCH /api/reports/:id/status',
+        updateRepair: 'PATCH /api/reports/:id/repair',
+        latest: 'GET /api/reports/dashboard/latest'
+      },
+      users: {
+        profile: 'GET /api/users/profile',
+        updateProfile: 'PUT /api/users/profile',
+        changePassword: 'POST /api/users/change-password',
+        lecturers: 'GET /api/users/lecturers'
+      },
+      notifications: {
+        list: 'GET /api/notifications',
+        markRead: 'PATCH /api/notifications/:id/read',
+        markAllRead: 'POST /api/notifications/mark-all-read'
+      },
+      stats: {
+        weekly: 'GET /api/stats/weekly',
+        summary: 'GET /api/stats/summary'
+      },
+      health: 'GET /api/health'
+    },
+    note: 'All POST/PATCH requests require JSON body',
+    authentication: 'Bearer token required for protected endpoints'
+  });
+});
+
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  console.error('Server Error:', err.stack);
   res.status(err.status || 500).json({
     success: false,
     message: err.message || 'Internal server error'
@@ -66,14 +123,15 @@ app.use('*', (req, res) => {
     success: false,
     message: 'Endpoint not found',
     available_endpoints: [
-      'GET /',
-      'GET /api/health',
+      'GET  /',
+      'GET  /api',
+      'GET  /api/health',
       'POST /api/auth/login',
       'POST /api/auth/register',
       'POST /api/auth/verify',
-      'GET /api/reports',
+      'GET  /api/reports',
       'POST /api/reports',
-      'GET /api/users/profile'
+      'GET  /api/users/profile'
     ]
   });
 });
@@ -82,7 +140,8 @@ const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📧 SMTP: ${process.env.SMTP_USER ? 'Configured' : 'Not configured'}`);
+  console.log(`📧 SMTP Configured: ${process.env.SMTP_USER ? 'YES' : 'NO'}`);
   console.log(`🌐 Frontend URL: ${process.env.FRONTEND_URL || 'Not set'}`);
   console.log(`📊 Database: ${process.env.DATABASE_URL ? 'Connected' : 'Not connected'}`);
+  console.log(`🔗 API Documentation: http://localhost:${PORT}/api`);
 });
