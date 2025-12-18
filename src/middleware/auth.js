@@ -1,5 +1,5 @@
+const jwt = require('jsonwebtoken');
 const { PrismaClient } = require('@prisma/client');
-const { verifyToken } = require('../utils/auth');
 
 const prisma = new PrismaClient();
 
@@ -8,10 +8,15 @@ const authenticate = async (req, res, next) => {
         const token = req.headers.authorization?.replace('Bearer ', '');
 
         if (!token) {
-            throw new Error('Authentication required');
+            return res.status(401).json({
+                success: false,
+                message: 'Token tidak ditemukan'
+            });
         }
 
-        const decoded = verifyToken(token);
+        // Verify token
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
+        
         const user = await prisma.user.findUnique({
             where: { id: decoded.userId },
             select: {
@@ -24,19 +29,27 @@ const authenticate = async (req, res, next) => {
         });
 
         if (!user) {
-            throw new Error('User not found');
+            return res.status(401).json({
+                success: false,
+                message: 'User tidak ditemukan'
+            });
         }
 
-        if (!user.isVerified) {
-            throw new Error('Please verify your email first');
-        }
-
+        // Tidak perlu cek isVerified karena langsung aktif
         req.user = user;
         next();
     } catch (error) {
-        res.status(401).json({
+        if (error.name === 'JsonWebTokenError') {
+            return res.status(401).json({
+                success: false,
+                message: 'Token tidak valid'
+            });
+        }
+        
+        console.error('Authentication error:', error);
+        res.status(500).json({
             success: false,
-            message: error.message
+            message: 'Terjadi kesalahan server'
         });
     }
 };
@@ -46,7 +59,7 @@ const authorize = (...roles) => {
         if (!roles.includes(req.user.role)) {
             return res.status(403).json({
                 success: false,
-                message: 'Forbidden: Insufficient permissions'
+                message: 'Akses ditolak: Anda tidak memiliki izin'
             });
         }
         next();
