@@ -15,9 +15,7 @@ model User {
   role              Role      @default(STUDENT)
   nim               String?
   nidn              String?
-  isVerified        Boolean   @default(false)
-  verificationCode  String?
-  verificationExpires DateTime?
+  isVerified        Boolean   @default(true)  // Langsung true tanpa verifikasi
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
   
@@ -41,6 +39,7 @@ model Report {
   userId            Int
   user              User      @relation(fields: [userId], references: [id])
   repairs           Repair[]
+  notifications     Notification[]
   
   @@index([userId])
   @@index([status])
@@ -72,6 +71,7 @@ model Notification {
   message           String
   type              NotificationType @default(INFO)
   isRead            Boolean   @default(false)
+  link              String?   // URL atau route untuk navigasi
   createdAt         DateTime  @default(now())
   
   userId            Int
@@ -80,6 +80,7 @@ model Notification {
   
   @@index([userId])
   @@index([isRead])
+  @@index([createdAt])
 }
 
 enum Role {
@@ -124,4 +125,5 @@ enum NotificationType {
   WARNING
   SUCCESS
   ERROR
+  SYSTEM
 }
