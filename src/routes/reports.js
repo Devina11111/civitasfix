@@ -1,9 +1,32 @@
 const express = require('express');
 const { PrismaClient } = require('@prisma/client');
-const { authenticate, authorize } = require('../middleware/auth');
+const jwt = require('jsonwebtoken');
 
 const router = express.Router();
 const prisma = new PrismaClient();
+
+// Middleware untuk autentikasi
+const authenticate = async (req, res, next) => {
+  try {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    
+    if (!token) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Token tidak ditemukan' 
+      });
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'civitasfix-secret-key');
+    req.userId = decoded.userId;
+    next();
+  } catch (error) {
+    res.status(401).json({ 
+      success: false, 
+      message: 'Token tidak valid' 
+    });
+  }
+};
 
 // Get all reports (with pagination and filters)
 router.get('/', authenticate, async (req, res) => {
@@ -13,9 +36,13 @@ router.get('/', authenticate, async (req, res) => {
 
         let where = {};
 
-        // Filter by user role
-        if (req.user.role === 'STUDENT') {
-            where.userId = req.user.id;
+        // Get user role
+        const user = await prisma.user.findUnique({
+          where: { id: req.userId }
+        });
+
+        if (user.role === 'STUDENT') {
+            where.userId = req.userId;
         }
 
         // Additional filters
@@ -32,20 +59,6 @@ router.get('/', authenticate, async (req, res) => {
                             name: true,
                             email: true,
                             role: true
-                        }
-                    },
-                    repairs: {
-                        include: {
-                            lecturer: {
-                                select: {
-                                    id: true,
-                                    name: true,
-                                    email: true
-                                }
-                            }
-                        },
-                        orderBy: {
-                            createdAt: 'desc'
                         }
                     }
                 },
@@ -87,20 +100,6 @@ router.get('/:id', authenticate, async (req, res) => {
                         email: true,
                         role: true
                     }
-                },
-                repairs: {
-                    include: {
-                        lecturer: {
-                            select: {
-                                id: true,
-                                name: true,
-                                email: true
-                            }
-                        }
-                    },
-                    orderBy: {
-                        createdAt: 'desc'
-                    }
                 }
             }
         });
@@ -109,8 +108,13 @@ router.get('/:id', authenticate, async (req, res) => {
             return res.status(404).json({ success: false, message: 'Laporan tidak ditemukan' });
         }
 
+        // Get user role
+        const user = await prisma.user.findUnique({
+          where: { id: req.userId }
+        });
+
         // Check permissions
-        if (req.user.role === 'STUDENT' && report.userId !== req.user.id) {
+        if (user.role === 'STUDENT' && report.userId !== req.userId) {
             return res.status(403).json({ success: false, message: 'Akses ditolak' });
         }
 
@@ -122,12 +126,21 @@ router.get('/:id', authenticate, async (req, res) => {
 });
 
 // Create report (Student only)
-router.post('/', authenticate, authorize('STUDENT'), async (req, res) => {
+router.post('/', authenticate, async (req, res) => {
     try {
         const { title, description, location, category, priority, imageUrl } = req.body;
 
         if (!title || !description || !location) {
             return res.status(400).json({ success: false, message: 'Judul, deskripsi, dan lokasi harus diisi' });
+        }
+
+        // Check user role
+        const user = await prisma.user.findUnique({
+          where: { id: req.userId }
+        });
+
+        if (user.role !== 'STUDENT') {
+          return res.status(403).json({ success: false, message: 'Hanya mahasiswa yang dapat membuat laporan' });
         }
 
         const report = await prisma.report.create({
@@ -138,7 +151,7 @@ router.post('/', authenticate, authorize('STUDENT'), async (req, res) => {
                 category: category || 'OTHER',
                 priority: priority || 'MEDIUM',
                 imageUrl,
-                userId: req.user.id
+                userId: req.userId
             },
             include: {
                 user: {
@@ -154,33 +167,13 @@ router.post('/', authenticate, authorize('STUDENT'), async (req, res) => {
         // Buat notifikasi untuk user
         await prisma.notification.create({
             data: {
-                userId: req.user.id,
+                userId: req.userId,
                 title: 'Laporan Dibuat',
                 message: `Laporan "${title}" berhasil dibuat dan sedang menunggu konfirmasi.`,
                 type: 'SUCCESS',
                 link: `/reports/${report.id}`
             }
         });
-
-        // Buat notifikasi untuk dosen (jika ada)
-        if (req.user.role === 'LECTURER' || req.user.role === 'ADMIN') {
-            const lecturers = await prisma.user.findMany({
-                where: { role: 'LECTURER' },
-                select: { id: true }
-            });
-
-            for (const lecturer of lecturers) {
-                await prisma.notification.create({
-                    data: {
-                        userId: lecturer.id,
-                        title: 'Laporan Baru',
-                        message: `Ada laporan baru: "${title}" di ${location}`,
-                        type: 'INFO',
-                        link: `/reports/${report.id}`
-                    }
-                });
-            }
-        }
 
         res.status(201).json({
             success: true,
@@ -194,16 +187,22 @@ router.post('/', authenticate, authorize('STUDENT'), async (req, res) => {
 });
 
 // Update report status (Lecturer/Admin only)
-router.patch('/:id/status', authenticate, authorize('LECTURER', 'ADMIN'), async (req, res) => {
+router.patch('/:id/status', authenticate, async (req, res) => {
     try {
-        const { status, notes, estimatedCost } = req.body;
+        const { status } = req.body;
         const reportId = parseInt(req.params.id);
 
+        // Check user role
+        const user = await prisma.user.findUnique({
+          where: { id: req.userId }
+        });
+
+        if (!['LECTURER', 'ADMIN'].includes(user.role)) {
+          return res.status(403).json({ success: false, message: 'Hanya dosen atau admin yang dapat mengubah status' });
+        }
+
         const report = await prisma.report.findUnique({
-            where: { id: reportId },
-            include: {
-                user: true
-            }
+            where: { id: reportId }
         });
 
         if (!report) {
@@ -216,51 +215,17 @@ router.patch('/:id/status', authenticate, authorize('LECTURER', 'ADMIN'), async 
             data: { status }
         });
 
-        // Create repair record for confirmed reports
-        if (status === 'CONFIRMED') {
-            await prisma.repair.create({
-                data: {
-                    reportId,
-                    lecturerId: req.user.id,
-                    notes,
-                    estimatedCost: estimatedCost ? parseFloat(estimatedCost) : null,
-                    status: 'CONFIRMED'
-                }
-            });
-
-            // Create notification for student
-            await prisma.notification.create({
-                data: {
-                    userId: report.userId,
-                    title: 'Laporan Dikonfirmasi',
-                    message: `Laporan "${report.title}" telah dikonfirmasi oleh dosen dan akan segera ditangani.`,
-                    type: 'SUCCESS',
-                    reportId,
-                    link: `/reports/${report.id}`
-                }
-            });
-        }
-
-        // Create notification for status change
-        const statusMessages = {
-            'CONFIRMED': 'dikonfirmasi',
-            'IN_PROGRESS': 'sedang dalam proses',
-            'COMPLETED': 'telah selesai',
-            'REJECTED': 'ditolak'
-        };
-
-        if (statusMessages[status]) {
-            await prisma.notification.create({
-                data: {
-                    userId: report.userId,
-                    title: 'Status Laporan Diperbarui',
-                    message: `Status laporan "${report.title}" ${statusMessages[status]}.`,
-                    type: 'INFO',
-                    reportId,
-                    link: `/reports/${report.id}`
-                }
-            });
-        }
+        // Create notification for student
+        await prisma.notification.create({
+            data: {
+                userId: report.userId,
+                title: 'Status Laporan Diperbarui',
+                message: `Status laporan "${report.title}" diubah menjadi ${status}.`,
+                type: 'INFO',
+                reportId,
+                link: `/reports/${report.id}`
+            }
+        });
 
         res.json({
             success: true,
@@ -273,155 +238,41 @@ router.patch('/:id/status', authenticate, authorize('LECTURER', 'ADMIN'), async 
     }
 });
 
-// Update repair (Lecturer only)
-router.patch('/:id/repair', authenticate, authorize('LECTURER', 'ADMIN'), async (req, res) => {
+// Get latest reports for dashboard
+router.get('/dashboard/latest', authenticate, async (req, res) => {
     try {
-        const { status, notes, actualCost } = req.body;
-        const reportId = parseInt(req.params.id);
+        let where = {};
 
-        // Find existing repair
-        const repair = await prisma.repair.findFirst({
-            where: {
-                reportId,
-                lecturerId: req.user.id
-            }
+        // Check user role
+        const user = await prisma.user.findUnique({
+          where: { id: req.userId }
         });
 
-        if (!repair) {
-            return res.status(404).json({ success: false, message: 'Data perbaikan tidak ditemukan' });
+        if (user.role === 'STUDENT') {
+            where.userId = req.userId;
         }
 
-        const updateData = {
-            status,
-            notes,
-            ...(actualCost && { actualCost: parseFloat(actualCost) })
-        };
-
-        if (status === 'COMPLETED') {
-            updateData.completedAt = new Date();
-            updateData.repairDate = new Date();
-
-            // Update report status
-            await prisma.report.update({
-                where: { id: reportId },
-                data: { status: 'COMPLETED' }
-            });
-        }
-
-        const updatedRepair = await prisma.repair.update({
-            where: { id: repair.id },
-            data: updateData
-        });
-
-        // Get report for notification
-        const report = await prisma.report.findUnique({
-            where: { id: reportId },
-            include: { user: true }
-        });
-
-        // Create notification for status changes
-        if (['IN_PROGRESS', 'COMPLETED'].includes(status)) {
-            const statusMessages = {
-                'IN_PROGRESS': 'sedang dalam proses perbaikan',
-                'COMPLETED': 'telah selesai diperbaiki'
-            };
-
-            await prisma.notification.create({
-                data: {
-                    userId: report.userId,
-                    title: 'Status Perbaikan Diperbarui',
-                    message: `Perbaikan untuk laporan "${report.title}" ${statusMessages[status]}.`,
-                    type: 'INFO',
-                    reportId,
-                    link: `/reports/${report.id}`
+        const reports = await prisma.report.findMany({
+            where,
+            include: {
+                user: {
+                    select: {
+                        id: true,
+                        name: true,
+                        email: true,
+                        role: true
+                    }
                 }
-            });
-        }
-
-        res.json({
-            success: true,
-            message: 'Data perbaikan berhasil diperbarui',
-            repair: updatedRepair
-        });
-    } catch (error) {
-        console.error('Update repair error:', error);
-        res.status(500).json({ success: false, message: 'Internal server error' });
-    }
-});
-
-// Get notifications for current user
-router.get('/:id/notifications', authenticate, async (req, res) => {
-    try {
-        const { limit = 20 } = req.query;
-        
-        const notifications = await prisma.notification.findMany({
-            where: { 
-                userId: req.user.id 
             },
             orderBy: {
                 createdAt: 'desc'
             },
-            take: parseInt(limit)
+            take: 10
         });
 
-        res.json({
-            success: true,
-            notifications
-        });
+        res.json({ success: true, reports });
     } catch (error) {
-        console.error('Get notifications error:', error);
-        res.status(500).json({ success: false, message: 'Internal server error' });
-    }
-});
-
-// Mark notification as read
-router.patch('/notifications/:id/read', authenticate, async (req, res) => {
-    try {
-        const notificationId = parseInt(req.params.id);
-
-        const notification = await prisma.notification.findFirst({
-            where: {
-                id: notificationId,
-                userId: req.user.id
-            }
-        });
-
-        if (!notification) {
-            return res.status(404).json({ success: false, message: 'Notifikasi tidak ditemukan' });
-        }
-
-        await prisma.notification.update({
-            where: { id: notificationId },
-            data: { isRead: true }
-        });
-
-        res.json({
-            success: true,
-            message: 'Notifikasi ditandai sebagai dibaca'
-        });
-    } catch (error) {
-        console.error('Mark notification as read error:', error);
-        res.status(500).json({ success: false, message: 'Internal server error' });
-    }
-});
-
-// Mark all notifications as read
-router.post('/notifications/read-all', authenticate, async (req, res) => {
-    try {
-        await prisma.notification.updateMany({
-            where: { 
-                userId: req.user.id,
-                isRead: false
-            },
-            data: { isRead: true }
-        });
-
-        res.json({
-            success: true,
-            message: 'Semua notifikasi ditandai sebagai dibaca'
-        });
-    } catch (error) {
-        console.error('Mark all notifications as read error:', error);
+        console.error('Get latest reports error:', error);
         res.status(500).json({ success: false, message: 'Internal server error' });
     }
 });
