@@ -167,6 +167,16 @@ app.use((req, res) => {
   });
 });
 
+app.use((req, res, next) => {
+    // Set timeout untuk 30 detik
+    req.setTimeout(30000, () => {
+        console.log(`Request timeout: ${req.method} ${req.url}`);
+    });
+    res.setTimeout(30000, () => {
+        console.log(`Response timeout: ${req.method} ${req.url}`);
+    });
+    next();
+});
 // Error handling
 app.use((err, req, res, next) => {
   console.error('Server Error:', err.message);
@@ -197,3 +207,4 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ Health check: http://localhost:${PORT}/health`);
   console.log(`✅ Test endpoint: http://localhost:${PORT}/test`);
 });
+
