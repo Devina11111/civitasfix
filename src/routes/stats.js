@@ -10,34 +10,51 @@ router.get('/summary', authenticate, async (req, res) => {
     try {
         let where = {};
         
-        // Perbaikan: Gunakan req.user dari middleware
         if (req.user.role === 'STUDENT') {
             where.userId = req.user.id;
         }
 
-        const [total, pending, inProgress, completed, rejected] = await Promise.all([
+        const [total, pending, confirmed, inProgress, completed, rejected] = await Promise.all([
             prisma.report.count({ where }),
             prisma.report.count({ where: { ...where, status: 'PENDING' } }),
+            prisma.report.count({ where: { ...where, status: 'CONFIRMED' } }),
             prisma.report.count({ where: { ...where, status: 'IN_PROGRESS' } }),
             prisma.report.count({ where: { ...where, status: 'COMPLETED' } }),
             prisma.report.count({ where: { ...where, status: 'REJECTED' } })
         ]);
 
-        res.json({
+        const responseData = {
             success: true,
             summary: {
                 total,
                 pending,
+                confirmed,
                 inProgress,
                 completed,
                 rejected
             }
-        });
+        };
+
+        // Tambahkan data tambahan untuk LECTURER/ADMIN
+        if (['LECTURER', 'ADMIN'].includes(req.user.role)) {
+            const [totalStudents, totalLecturers] = await Promise.all([
+                prisma.user.count({ where: { role: 'STUDENT' } }),
+                prisma.user.count({ where: { role: 'LECTURER' } })
+            ]);
+
+            responseData.summary.totalUsers = {
+                students: totalStudents,
+                lecturers: totalLecturers,
+                total: totalStudents + totalLecturers
+            };
+        }
+
+        res.json(responseData);
     } catch (error) {
-        console.error('Get stats error:', error);
+        console.error('[STATS] GET /summary Error:', error);
         res.status(500).json({ 
             success: false, 
-            message: 'Internal server error',
+            message: 'Gagal mengambil data statistik',
             error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
@@ -52,29 +69,72 @@ router.get('/weekly', authenticate, async (req, res) => {
             where.userId = req.user.id;
         }
 
-        // Count by status
+        // Hitung berdasarkan status
+        const statusCounts = await Promise.all([
+            prisma.report.count({ where: { ...where, status: 'PENDING' } }),
+            prisma.report.count({ where: { ...where, status: 'CONFIRMED' } }),
+            prisma.report.count({ where: { ...where, status: 'IN_PROGRESS' } }),
+            prisma.report.count({ where: { ...where, status: 'COMPLETED' } }),
+            prisma.report.count({ where: { ...where, status: 'REJECTED' } })
+        ]);
+
         const byStatus = {
-            PENDING: await prisma.report.count({ where: { ...where, status: 'PENDING' } }),
-            CONFIRMED: await prisma.report.count({ where: { ...where, status: 'CONFIRMED' } }),
-            IN_PROGRESS: await prisma.report.count({ where: { ...where, status: 'IN_PROGRESS' } }),
-            COMPLETED: await prisma.report.count({ where: { ...where, status: 'COMPLETED' } }),
-            REJECTED: await prisma.report.count({ where: { ...where, status: 'REJECTED' } })
+            PENDING: statusCounts[0],
+            CONFIRMED: statusCounts[1],
+            IN_PROGRESS: statusCounts[2],
+            COMPLETED: statusCounts[3],
+            REJECTED: statusCounts[4]
         };
 
-        // Count by category
+        // Hitung berdasarkan kategori
+        const categoryCounts = await Promise.all([
+            prisma.report.count({ where: { ...where, category: 'FURNITURE' } }),
+            prisma.report.count({ where: { ...where, category: 'ELECTRONIC' } }),
+            prisma.report.count({ where: { ...where, category: 'BUILDING' } }),
+            prisma.report.count({ where: { ...where, category: 'SANITARY' } }),
+            prisma.report.count({ where: { ...where, category: 'OTHER' } })
+        ]);
+
         const byCategory = {
-            FURNITURE: await prisma.report.count({ where: { ...where, category: 'FURNITURE' } }),
-            ELECTRONIC: await prisma.report.count({ where: { ...where, category: 'ELECTRONIC' } }),
-            BUILDING: await prisma.report.count({ where: { ...where, category: 'BUILDING' } }),
-            SANITARY: await prisma.report.count({ where: { ...where, category: 'SANITARY' } }),
-            OTHER: await prisma.report.count({ where: { ...where, category: 'OTHER' } })
+            FURNITURE: categoryCounts[0],
+            ELECTRONIC: categoryCounts[1],
+            BUILDING: categoryCounts[2],
+            SANITARY: categoryCounts[3],
+            OTHER: categoryCounts[4]
         };
+
+        // Data untuk chart mingguan (7 hari terakhir)
+        const weeklyData = [];
+        for (let i = 6; i >= 0; i--) {
+            const date = new Date();
+            date.setDate(date.getDate() - i);
+            date.setHours(0, 0, 0, 0);
+            
+            const nextDate = new Date(date);
+            nextDate.setDate(nextDate.getDate() + 1);
+            
+            const dailyWhere = {
+                ...where,
+                createdAt: {
+                    gte: date,
+                    lt: nextDate
+                }
+            };
+            
+            const dailyCount = await prisma.report.count({ where: dailyWhere });
+            
+            weeklyData.push({
+                date: date.toISOString().split('T')[0],
+                count: dailyCount
+            });
+        }
 
         res.json({
             success: true,
             stats: {
                 byStatus,
                 byCategory,
+                weekly: weeklyData,
                 totals: {
                     all: Object.values(byStatus).reduce((a, b) => a + b, 0),
                     pending: byStatus.PENDING,
@@ -83,10 +143,10 @@ router.get('/weekly', authenticate, async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('Get weekly stats error:', error);
+        console.error('[STATS] GET /weekly Error:', error);
         res.status(500).json({ 
             success: false, 
-            message: 'Internal server error',
+            message: 'Gagal mengambil data statistik mingguan',
             error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
