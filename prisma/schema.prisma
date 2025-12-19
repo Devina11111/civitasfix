@@ -37,14 +37,6 @@ model Report {
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
   
-  // Repair information
-  repairNotes       String?
-  repairStatus      String?
-  estimatedCost     Float?
-  actualCost        Float?
-  repairDate        DateTime?
-  completedAt       DateTime?
-  
   userId            Int
   user              User      @relation(fields: [userId], references: [id])
   
