@@ -1,6 +1,8 @@
 const express = require('express');
 const { PrismaClient } = require('@prisma/client');
+const bcrypt = require('bcryptjs');
 const { authenticate } = require('../middleware/auth');
+
 const router = express.Router();
 const prisma = new PrismaClient();
 
@@ -9,7 +11,13 @@ router.get('/test', (req, res) => {
     res.json({
         success: true,
         message: 'Users endpoint is working',
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        endpoints: {
+            profile: 'GET /api/users/profile',
+            updateProfile: 'PUT /api/users/profile',
+            changePassword: 'POST /api/users/change-password',
+            lecturers: 'GET /api/users/lecturers'
+        }
     });
 });
 
@@ -36,19 +44,79 @@ router.get('/profile', authenticate, async (req, res) => {
         if (!user) {
             return res.status(404).json({ 
                 success: false, 
-                message: 'User not found' 
+                message: 'User tidak ditemukan' 
+            });
+        }
+
+        // Get report statistics based on user role
+        let statistics = {
+            totalReports: 0,
+            activeReports: 0,
+            completedReports: 0,
+            pendingReports: 0
+        };
+
+        if (req.user.role === 'STUDENT') {
+            // For students, only count their own reports
+            statistics.totalReports = await prisma.report.count({
+                where: { userId: req.user.id }
+            });
+
+            statistics.activeReports = await prisma.report.count({
+                where: { 
+                    userId: req.user.id,
+                    status: { in: ['CONFIRMED', 'IN_PROGRESS'] }
+                }
+            });
+
+            statistics.completedReports = await prisma.report.count({
+                where: { 
+                    userId: req.user.id,
+                    status: 'COMPLETED'
+                }
+            });
+
+            statistics.pendingReports = await prisma.report.count({
+                where: { 
+                    userId: req.user.id,
+                    status: 'PENDING'
+                }
+            });
+        } else if (req.user.role === 'LECTURER') {
+            // For lecturers, count all reports
+            statistics.totalReports = await prisma.report.count();
+            
+            statistics.activeReports = await prisma.report.count({
+                where: { 
+                    status: { in: ['CONFIRMED', 'IN_PROGRESS'] }
+                }
+            });
+
+            statistics.completedReports = await prisma.report.count({
+                where: { 
+                    status: 'COMPLETED'
+                }
+            });
+
+            statistics.pendingReports = await prisma.report.count({
+                where: { 
+                    status: 'PENDING'
+                }
             });
         }
 
         res.json({ 
             success: true, 
-            user 
+            user: {
+                ...user,
+                statistics
+            }
         });
     } catch (error) {
         console.error('Get profile error:', error);
         res.status(500).json({ 
             success: false, 
-            message: 'Internal server error' 
+            message: 'Terjadi kesalahan server' 
         });
     }
 });
@@ -58,14 +126,38 @@ router.put('/profile', authenticate, async (req, res) => {
     try {
         const { name, nim, nidn } = req.body;
 
-        const updateData = { name };
-
-        if (req.user.role === 'STUDENT' && nim) {
-            updateData.nim = nim;
+        if (!name || name.trim() === '') {
+            return res.status(400).json({
+                success: false,
+                message: 'Nama harus diisi'
+            });
         }
 
-        if (req.user.role === 'LECTURER' && nidn) {
-            updateData.nidn = nidn;
+        const updateData = { name: name.trim() };
+
+        // Validate and update based on role
+        if (req.user.role === 'STUDENT') {
+            if (nim && nim.trim() !== '') {
+                if (nim.trim().length < 8) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'NPM minimal 8 karakter'
+                    });
+                }
+                updateData.nim = nim.trim();
+            }
+        }
+
+        if (req.user.role === 'LECTURER') {
+            if (nidn && nidn.trim() !== '') {
+                if (nidn.trim().length < 10) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'NIP minimal 10 karakter'
+                    });
+                }
+                updateData.nidn = nidn.trim();
+            }
         }
 
         const user = await prisma.user.update({
@@ -78,7 +170,8 @@ router.put('/profile', authenticate, async (req, res) => {
                 role: true,
                 nim: true,
                 nidn: true,
-                isVerified: true
+                isVerified: true,
+                updatedAt: true
             }
         });
 
@@ -93,13 +186,13 @@ router.put('/profile', authenticate, async (req, res) => {
         if (error.code === 'P2025') {
             return res.status(404).json({ 
                 success: false, 
-                message: 'User not found' 
+                message: 'User tidak ditemukan' 
             });
         }
         
         res.status(500).json({ 
             success: false, 
-            message: 'Internal server error' 
+            message: 'Terjadi kesalahan server' 
         });
     }
 });
@@ -131,17 +224,25 @@ router.post('/change-password', authenticate, async (req, res) => {
         if (!user) {
             return res.status(404).json({ 
                 success: false, 
-                message: 'User not found' 
+                message: 'User tidak ditemukan' 
             });
         }
 
-        const bcrypt = require('bcryptjs');
         const isValid = await bcrypt.compare(currentPassword, user.password);
 
         if (!isValid) {
             return res.status(400).json({ 
                 success: false, 
                 message: 'Password saat ini salah' 
+            });
+        }
+
+        // Check if new password is same as old password
+        const isSamePassword = await bcrypt.compare(newPassword, user.password);
+        if (isSamePassword) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Password baru tidak boleh sama dengan password lama' 
             });
         }
 
@@ -160,7 +261,7 @@ router.post('/change-password', authenticate, async (req, res) => {
         console.error('Change password error:', error);
         res.status(500).json({ 
             success: false, 
-            message: 'Internal server error' 
+            message: 'Terjadi kesalahan server' 
         });
     }
 });
@@ -169,7 +270,10 @@ router.post('/change-password', authenticate, async (req, res) => {
 router.get('/lecturers', authenticate, async (req, res) => {
     try {
         const lecturers = await prisma.user.findMany({
-            where: { role: 'LECTURER' },
+            where: { 
+                role: 'LECTURER',
+                isVerified: true
+            },
             select: {
                 id: true,
                 name: true,
@@ -180,12 +284,59 @@ router.get('/lecturers', authenticate, async (req, res) => {
             orderBy: { name: 'asc' }
         });
 
-        res.json({ success: true, lecturers });
+        res.json({ 
+            success: true, 
+            lecturers,
+            count: lecturers.length
+        });
     } catch (error) {
         console.error('Get lecturers error:', error);
         res.status(500).json({ 
             success: false, 
-            message: 'Internal server error' 
+            message: 'Terjadi kesalahan server' 
+        });
+    }
+});
+
+// Get user by ID (for internal use)
+router.get('/:id', authenticate, async (req, res) => {
+    try {
+        const userId = parseInt(req.params.id);
+        
+        if (req.user.role !== 'LECTURER' && req.user.role !== 'ADMIN') {
+            return res.status(403).json({
+                success: false,
+                message: 'Anda tidak memiliki izin untuk mengakses data user'
+            });
+        }
+
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: {
+                id: true,
+                name: true,
+                email: true,
+                role: true,
+                nim: true,
+                nidn: true,
+                isVerified: true,
+                createdAt: true
+            }
+        });
+
+        if (!user) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'User tidak ditemukan' 
+            });
+        }
+
+        res.json({ success: true, user });
+    } catch (error) {
+        console.error('Get user by ID error:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Terjadi kesalahan server' 
         });
     }
 });
