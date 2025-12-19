@@ -117,7 +117,7 @@ router.get('/', authenticate, async (req, res) => {
     }
 });
 
-// GET latest reports for dashboard - NEW ENDPOINT
+// GET latest reports for dashboard
 router.get('/dashboard/latest', authenticate, async (req, res) => {
     try {
         let where = {};
@@ -218,7 +218,6 @@ router.post('/', authenticate, upload.single('image'), async (req, res) => {
 
         let imageFilename = null;
         if (req.file) {
-            // Simpan hanya nama file, path relatif nanti dibangun di getImageUrl
             imageFilename = req.file.filename;
         }
 
@@ -240,30 +239,36 @@ router.post('/', authenticate, upload.single('image'), async (req, res) => {
         });
 
         // Buat notifikasi untuk admin/dosen tentang laporan baru
-        if (['LECTURER', 'ADMIN'].includes(req.user.role)) {
-            // Admin/Lecturer tidak perlu notifikasi untuk laporan mereka sendiri
-        } else {
-            // Cari semua admin dan lecturer
-            const adminsLecturers = await prisma.user.findMany({
-                where: {
-                    role: { in: ['ADMIN', 'LECTURER'] }
+        const adminsLecturers = await prisma.user.findMany({
+            where: {
+                role: { in: ['ADMIN', 'LECTURER'] }
+            }
+        });
+
+        for (const user of adminsLecturers) {
+            await prisma.notification.create({
+                data: {
+                    userId: user.id,
+                    title: 'Laporan Baru',
+                    message: `Laporan baru dibuat oleh ${req.user.name}: ${title}`,
+                    type: 'INFO',
+                    link: `/reports/${report.id}`,
+                    reportId: report.id
                 }
             });
-
-            // Buat notifikasi untuk setiap admin/lecturer
-            for (const user of adminsLecturers) {
-                await prisma.notification.create({
-                    data: {
-                        userId: user.id,
-                        title: 'Laporan Baru',
-                        message: `Laporan baru dibuat oleh ${req.user.name}: ${title}`,
-                        type: 'INFO',
-                        link: `/reports/${report.id}`,
-                        reportId: report.id
-                    }
-                });
-            }
         }
+
+        // Buat notifikasi untuk user yang membuat laporan
+        await prisma.notification.create({
+            data: {
+                userId: req.user.id,
+                title: 'Laporan Berhasil Dibuat',
+                message: `Laporan Anda "${title}" berhasil dibuat dan sedang menunggu konfirmasi.`,
+                type: 'SUCCESS',
+                link: `/reports/${report.id}`,
+                reportId: report.id
+            }
+        });
 
         res.status(201).json({
             success: true,
