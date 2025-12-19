@@ -35,12 +35,6 @@ const upload = multer({
     }
 });
 
-// Debug middleware untuk log requests
-router.use((req, res, next) => {
-    console.log(`[REPORTS] ${req.method} ${req.url}`);
-    next();
-});
-
 // GET all reports dengan pagination dan filter
 router.get('/', authenticate, async (req, res) => {
     try {
@@ -57,8 +51,6 @@ router.get('/', authenticate, async (req, res) => {
 
         if (status && status !== '') where.status = status;
         if (category && category !== '') where.category = category;
-
-        console.log('[REPORTS] Query params:', { page, limit, status, category, where });
 
         const [reports, total] = await Promise.all([
             prisma.report.findMany({
@@ -80,23 +72,9 @@ router.get('/', authenticate, async (req, res) => {
             prisma.report.count({ where })
         ]);
 
-        console.log(`[REPORTS] Found ${reports.length} reports, total: ${total}`);
-
         res.json({
             success: true,
-            reports: reports.map(report => ({
-                id: report.id,
-                title: report.title,
-                description: report.description,
-                location: report.location,
-                category: report.category,
-                status: report.status,
-                priority: report.priority,
-                imageUrl: report.imageUrl,
-                createdAt: report.createdAt,
-                updatedAt: report.updatedAt,
-                user: report.user
-            })),
+            reports,
             pagination: {
                 page: parseInt(page),
                 limit: parseInt(limit),
@@ -106,7 +84,6 @@ router.get('/', authenticate, async (req, res) => {
         });
     } catch (error) {
         console.error('[REPORTS] Error in GET /:', error);
-        console.error('[REPORTS] Error stack:', error.stack);
         res.status(500).json({ 
             success: false, 
             message: 'Internal server error',
@@ -142,26 +119,12 @@ router.get('/dashboard/latest', authenticate, async (req, res) => {
             take: 10
         });
 
-        console.log(`[REPORTS] Found ${reports.length} latest reports`);
-
         res.json({
             success: true,
-            reports: reports.map(report => ({
-                id: report.id,
-                title: report.title,
-                description: report.description,
-                location: report.location,
-                category: report.category,
-                status: report.status,
-                priority: report.priority,
-                imageUrl: report.imageUrl,
-                createdAt: report.createdAt,
-                user: report.user
-            }))
+            reports
         });
     } catch (error) {
         console.error('[REPORTS] Error in GET /dashboard/latest:', error);
-        console.error('[REPORTS] Error stack:', error.stack);
         res.status(500).json({ 
             success: false, 
             message: 'Internal server error',
@@ -207,25 +170,7 @@ router.get('/:id', authenticate, async (req, res) => {
 
         res.json({ 
             success: true, 
-            report: {
-                id: report.id,
-                title: report.title,
-                description: report.description,
-                location: report.location,
-                category: report.category,
-                status: report.status,
-                priority: report.priority,
-                imageUrl: report.imageUrl,
-                createdAt: report.createdAt,
-                updatedAt: report.updatedAt,
-                repairNotes: report.repairNotes,
-                repairStatus: report.repairStatus,
-                estimatedCost: report.estimatedCost,
-                actualCost: report.actualCost,
-                repairDate: report.repairDate,
-                completedAt: report.completedAt,
-                user: report.user
-            }
+            report
         });
     } catch (error) {
         console.error('[REPORTS] Error in GET /:id:', error);
@@ -241,9 +186,7 @@ router.get('/:id', authenticate, async (req, res) => {
 router.post('/', authenticate, upload.single('image'), async (req, res) => {
     try {
         console.log('[REPORTS] POST / - User:', req.user.email);
-        console.log('[REPORTS] Request body:', req.body);
-        console.log('[REPORTS] File:', req.file);
-
+        
         const { title, description, location, category, priority } = req.body;
 
         if (!title || !description || !location) {
@@ -295,7 +238,6 @@ router.post('/', authenticate, upload.single('image'), async (req, res) => {
         });
     } catch (error) {
         console.error('[REPORTS] Error in POST /:', error);
-        console.error('[REPORTS] Error stack:', error.stack);
         
         if (req.file && req.file.path) {
             fs.unlink(req.file.path, (err) => {
@@ -309,6 +251,58 @@ router.post('/', authenticate, upload.single('image'), async (req, res) => {
             error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
+});
+
+// UPDATE report status (Lecturer/Admin only)
+router.patch('/:id/status', authenticate, async (req, res) => {
+    try {
+        const { status } = req.body;
+        const reportId = parseInt(req.params.id);
+
+        if (!['LECTURER', 'ADMIN'].includes(req.user.role)) {
+            return res.status(403).json({ 
+                success: false, 
+                message: 'Hanya dosen atau admin yang dapat mengubah status' 
+            });
+        }
+
+        const report = await prisma.report.findUnique({
+            where: { id: reportId }
+        });
+
+        if (!report) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Laporan tidak ditemukan' 
+            });
+        }
+
+        const updatedReport = await prisma.report.update({
+            where: { id: reportId },
+            data: { status }
+        });
+
+        res.json({
+            success: true,
+            message: 'Status laporan berhasil diperbarui',
+            report: updatedReport
+        });
+    } catch (error) {
+        console.error('[REPORTS] Update report error:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Internal server error',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+});
+
+// Endpoint repair di-nonaktifkan sementara
+router.patch('/:id/repair', authenticate, async (req, res) => {
+    return res.status(501).json({
+        success: false,
+        message: 'Fitur perbaikan sedang dalam pengembangan'
+    });
 });
 
 module.exports = router;
