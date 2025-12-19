@@ -3,22 +3,46 @@ const cors = require('cors');
 const dotenv = require('dotenv');
 const path = require('path');
 const fs = require('fs');
-const { PrismaClient } = require('@prisma/client');
+const helmet = require('helmet');
+const morgan = require('morgan');
 
 // Load environment variables
 dotenv.config();
 
 const app = express();
-const prisma = new PrismaClient();
 
-// Middleware
-app.use(cors({
-  origin: ['https://civitasfix.netlify.app', 'http://localhost:5173'],
-  credentials: true
-}));
+// Security middleware
+app.use(helmet());
 
+// CORS configuration
+const corsOptions = {
+  origin: function (origin, callback) {
+    const allowedOrigins = [
+      'https://civitasfix.netlify.app',
+      'http://localhost:5173',
+      'http://localhost:5174'
+    ];
+    
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      console.log('CORS blocked for origin:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  optionsSuccessStatus: 200
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Logging middleware
+app.use(morgan('combined'));
 
 // Static files for uploads
 const uploadsDir = path.join(__dirname, 'uploads');
@@ -27,12 +51,6 @@ if (!fs.existsSync(uploadsDir)) {
   console.log('📁 Created uploads directory');
 }
 app.use('/uploads', express.static(uploadsDir));
-
-// Logging middleware
-app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
-  next();
-});
 
 // Import routes
 const authRoutes = require('./routes/auth');
@@ -67,45 +85,6 @@ app.get('/health', (req, res) => {
     message: 'CivitasFix Backend is running',
     timestamp: new Date().toISOString()
   });
-});
-
-// Health check with database test
-app.get('/api/health', async (req, res) => {
-  try {
-    // Try to query database
-    await prisma.$queryRaw`SELECT 1`;
-    
-    // Check uploads directory
-    const uploadsExists = fs.existsSync(uploadsDir);
-    
-    res.json({
-      status: 'OK',
-      message: 'CivitasFix Backend API is running',
-      version: '2.0.0',
-      timestamp: new Date().toISOString(),
-      environment: process.env.NODE_ENV || 'production',
-      database: 'Connected',
-      uploads: uploadsExists ? 'Available' : 'Not available',
-      features: {
-        registration: 'Instant activation',
-        notifications: 'Internal system',
-        authentication: 'JWT based',
-        fileUpload: 'Enabled',
-        users: 'Profile management'
-      }
-    });
-  } catch (error) {
-    console.error('Database connection error:', error);
-    
-    res.status(500).json({
-      status: 'ERROR',
-      message: 'Database connection failed',
-      timestamp: new Date().toISOString(),
-      environment: process.env.NODE_ENV || 'production',
-      database: 'Disconnected',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
 });
 
 // API Documentation
@@ -152,13 +131,6 @@ app.get('/api', (req, res) => {
         test: 'GET /test',
         uploads: 'GET /uploads/:filename'
       }
-    },
-    features: {
-      instant_registration: 'No email verification required',
-      file_upload: 'Image upload for reports (max 5MB)',
-      realtime_notifications: 'Internal notification system',
-      role_based_access: 'Student, Lecturer, Admin',
-      image_preview: 'Direct image display from uploads'
     }
   });
 });
@@ -171,35 +143,9 @@ app.get('/', (req, res) => {
     status: 'Running',
     frontend: 'https://civitasfix.netlify.app',
     documentation: '/api',
-    health: '/api/health',
-    test: '/test',
-    uploads: '/uploads/',
-    important_notes: [
-      'All endpoints require authentication except /auth/register, /auth/login, and test endpoints',
-      'Image uploads are stored in /uploads directory',
-      'No email verification required - accounts are instantly active',
-      'Notifications are internal only - no email notifications'
-    ]
+    health: '/health',
+    test: '/test'
   });
-});
-
-// Uploads directory info
-app.get('/uploads', (req, res) => {
-  try {
-    const files = fs.readdirSync(uploadsDir);
-    res.json({
-      message: 'Uploads directory',
-      path: uploadsDir,
-      fileCount: files.length,
-      files: files,
-      note: 'Images are served statically at /uploads/filename'
-    });
-  } catch (error) {
-    res.status(500).json({
-      error: 'Could not read uploads directory',
-      message: error.message
-    });
-  }
 });
 
 // 404 handler
@@ -212,116 +158,42 @@ app.use((req, res) => {
     available_endpoints: [
       'GET /',
       'GET /api',
-      'GET /api/health',
+      'GET /health',
       'GET /test',
       'POST /api/auth/register',
       'POST /api/auth/login',
-      'GET /api/auth/me',
-      'GET /api/users/profile',
-      'PUT /api/users/profile',
-      'GET /api/reports',
-      'POST /api/reports',
-      'GET /api/notifications'
-    ],
-    common_issues: [
-      'Check if you are authenticated (include Authorization header)',
-      'Check if the endpoint path is correct',
-      'For file uploads, use multipart/form-data'
+      'GET /api/auth/me'
     ]
   });
 });
 
-// Error handling middleware
+// Error handling
 app.use((err, req, res, next) => {
-  console.error('Server Error:', err.stack);
+  console.error('Server Error:', err.message);
+  console.error(err.stack);
   
-  // Handle multer file size errors
-  if (err.code === 'LIMIT_FILE_SIZE') {
-    return res.status(400).json({
+  // Handle CORS errors
+  if (err.message === 'Not allowed by CORS') {
+    return res.status(403).json({
       success: false,
-      message: 'File size too large. Maximum size is 5MB.'
-    });
-  }
-  
-  // Handle multer file type errors
-  if (err.message === 'Hanya file gambar yang diperbolehkan') {
-    return res.status(400).json({
-      success: false,
-      message: 'Only image files are allowed.'
+      message: 'Origin not allowed by CORS'
     });
   }
   
   res.status(500).json({
     success: false,
     message: 'Internal server error',
-    error: process.env.NODE_ENV === 'development' ? err.message : undefined,
-    timestamp: new Date().toISOString()
+    error: process.env.NODE_ENV === 'development' ? err.message : undefined
   });
 });
 
 const PORT = process.env.PORT || 5000;
 
 // Start server
-const startServer = async () => {
-  try {
-    console.log('🚀 Starting CivitasFix Backend...');
-    console.log(`📡 Environment: ${process.env.NODE_ENV || 'production'}`);
-    console.log(`🔗 Database URL: ${process.env.DATABASE_URL ? 'Configured' : 'Not configured'}`);
-    console.log(`📁 Uploads directory: ${uploadsDir}`);
-    
-    // Test database connection
-    try {
-      await prisma.$queryRaw`SELECT 1`;
-      console.log('✅ Database connected successfully');
-    } catch (dbError) {
-      console.error('❌ Database connection failed:', dbError.message);
-      console.log('💡 TIPS: Check if migrations have been applied: npx prisma migrate deploy');
-    }
-    
-    // Check if uploads directory exists
-    if (!fs.existsSync(uploadsDir)) {
-      console.log('📁 Creating uploads directory...');
-      fs.mkdirSync(uploadsDir, { recursive: true });
-    }
-    
-    app.listen(PORT, '0.0.0.0', () => {
-      console.log(`✅ Server running on port ${PORT}`);
-      console.log(`🌐 CORS Origin: https://civitasfix.netlify.app`);
-      console.log(`📊 Health Check: http://localhost:${PORT}/api/health`);
-      console.log(`🧪 Test Endpoint: http://localhost:${PORT}/test`);
-      console.log(`📁 Uploads: http://localhost:${PORT}/uploads/`);
-      console.log('\n📋 Available Endpoints:');
-      console.log('  GET  /                    - API info');
-      console.log('  GET  /api                 - Documentation');
-      console.log('  GET  /api/health          - Health check');
-      console.log('  POST /api/auth/register   - Register user');
-      console.log('  POST /api/auth/login      - Login');
-      console.log('  GET  /api/auth/me         - Get current user');
-      console.log('  GET  /api/users/profile   - User profile');
-      console.log('  PUT  /api/users/profile   - Update profile');
-      console.log('  POST /api/reports         - Create report (with image upload)');
-      console.log('  GET  /api/reports         - List reports');
-      console.log('  GET  /api/notifications   - User notifications');
-    });
-  } catch (error) {
-    console.error('Failed to start server:', error);
-    process.exit(1);
-  }
-};
-
-startServer();
-
-// Graceful shutdown
-process.on('SIGINT', async () => {
-  console.log('Shutting down server...');
-  await prisma.$disconnect();
-  console.log('Database disconnected');
-  process.exit(0);
-});
-
-process.on('SIGTERM', async () => {
-  console.log('Terminating server...');
-  await prisma.$disconnect();
-  console.log('Database disconnected');
-  process.exit(0);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🌐 Environment: ${process.env.NODE_ENV || 'production'}`);
+  console.log(`📁 Uploads directory: ${uploadsDir}`);
+  console.log(`✅ Health check: http://localhost:${PORT}/health`);
+  console.log(`✅ Test endpoint: http://localhost:${PORT}/test`);
 });
