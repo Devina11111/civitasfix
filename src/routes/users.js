@@ -46,7 +46,7 @@ router.get('/profile', authenticate, async (req, res) => {
         const reportWhere = req.user.role === 'STUDENT' ? { userId: req.user.id } : {};
 
         if (req.user.role === 'STUDENT' || req.user.role === 'LECTURER' || req.user.role === 'ADMIN') {
-            const [total, active, completed, pending] = await Promise.all([
+            const [total, active, completed, pending, confirmed, inProgress, rejected] = await Promise.all([
                 prisma.report.count({ where: reportWhere }),
                 prisma.report.count({ 
                     where: { 
@@ -65,10 +65,36 @@ router.get('/profile', authenticate, async (req, res) => {
                         ...reportWhere,
                         status: 'PENDING'
                     }
+                }),
+                prisma.report.count({ 
+                    where: { 
+                        ...reportWhere,
+                        status: 'CONFIRMED'
+                    }
+                }),
+                prisma.report.count({ 
+                    where: { 
+                        ...reportWhere,
+                        status: 'IN_PROGRESS'
+                    }
+                }),
+                prisma.report.count({ 
+                    where: { 
+                        ...reportWhere,
+                        status: 'REJECTED'
+                    }
                 })
             ]);
 
-            statistics = { totalReports: total, activeReports: active, completedReports: completed, pendingReports: pending };
+            statistics = { 
+                totalReports: total, 
+                activeReports: active, 
+                completedReports: completed, 
+                pendingReports: pending,
+                confirmedReports: confirmed,
+                inProgressReports: inProgress,
+                rejectedReports: rejected
+            };
         }
 
         res.json({ 
@@ -82,7 +108,8 @@ router.get('/profile', authenticate, async (req, res) => {
         console.error('[USERS] GET /profile Error:', error);
         res.status(500).json({ 
             success: false, 
-            message: 'Gagal mengambil data profil' 
+            message: 'Gagal mengambil data profil',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
 });
@@ -154,7 +181,8 @@ router.put('/profile', authenticate, async (req, res) => {
         
         res.status(500).json({ 
             success: false, 
-            message: 'Gagal memperbarui profil' 
+            message: 'Gagal memperbarui profil',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
 });
@@ -214,7 +242,8 @@ router.post('/change-password', authenticate, async (req, res) => {
         console.error('[USERS] POST /change-password Error:', error);
         res.status(500).json({ 
             success: false, 
-            message: 'Gagal mengubah password' 
+            message: 'Gagal mengubah password',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
 });
@@ -246,7 +275,53 @@ router.get('/lecturers', authenticate, async (req, res) => {
         console.error('[USERS] GET /lecturers Error:', error);
         res.status(500).json({ 
             success: false, 
-            message: 'Gagal mengambil data dosen' 
+            message: 'Gagal mengambil data dosen',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+});
+
+// Get all students (for lecturers/admins)
+router.get('/students', authenticate, async (req, res) => {
+    try {
+        if (req.user.role !== 'LECTURER' && req.user.role !== 'ADMIN') {
+            return res.status(403).json({ 
+                success: false, 
+                message: 'Hanya dosen atau admin yang dapat mengakses data mahasiswa' 
+            });
+        }
+
+        const students = await prisma.user.findMany({
+            where: { 
+                role: 'STUDENT',
+                isVerified: true
+            },
+            select: {
+                id: true,
+                name: true,
+                email: true,
+                nim: true,
+                createdAt: true,
+                _count: {
+                    select: {
+                        reports: true
+                    }
+                }
+            },
+            orderBy: { name: 'asc' }
+        });
+
+        res.json({ 
+            success: true, 
+            students,
+            count: students.length
+        });
+    } catch (error) {
+        console.error('[USERS] GET /students Error:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Gagal mengambil data mahasiswa',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
 });
@@ -263,4 +338,45 @@ router.get('/:id', authenticate, async (req, res) => {
             });
         }
 
-        //
+        // Authorization check
+        if (req.user.role !== 'LECTURER' && req.user.role !== 'ADMIN' && req.user.id !== userId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Anda tidak memiliki izin untuk mengakses data user lain'
+            });
+        }
+
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: {
+                id: true,
+                name: true,
+                email: true,
+                role: true,
+                nim: true,
+                nidn: true,
+                isVerified: true,
+                createdAt: true,
+                updatedAt: true
+            }
+        });
+
+        if (!user) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'User tidak ditemukan' 
+            });
+        }
+
+        res.json({ success: true, user });
+    } catch (error) {
+        console.error('[USERS] GET /:id Error:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Gagal mengambil data user',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+});
+
+module.exports = router;
