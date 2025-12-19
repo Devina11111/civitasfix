@@ -20,14 +20,12 @@ router.get('/test', (req, res) => {
   });
 });
 
-// SIMPLE REGISTER (Tanpa validasi lengkap untuk testing)
+// REGISTER
 router.post('/register', async (req, res) => {
   try {
-    console.log('Register request received:', req.body);
-    
     const { email, password, name, role = 'STUDENT', nim, nidn } = req.body;
 
-    // Basic validation
+    // Validasi input
     if (!email || !password || !name) {
       return res.status(400).json({
         success: false,
@@ -35,10 +33,34 @@ router.post('/register', async (req, res) => {
       });
     }
 
+    // Validasi email
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Format email tidak valid'
+      });
+    }
+
     if (password.length < 6) {
       return res.status(400).json({
         success: false,
         message: 'Password minimal 6 karakter'
+      });
+    }
+
+    // Validasi role-specific fields
+    if (role === 'STUDENT' && !nim) {
+      return res.status(400).json({
+        success: false,
+        message: 'NIM harus diisi untuk mahasiswa'
+      });
+    }
+
+    if (role === 'LECTURER' && !nidn) {
+      return res.status(400).json({
+        success: false,
+        message: 'NIDN harus diisi untuk dosen'
       });
     }
 
@@ -70,7 +92,7 @@ router.post('/register', async (req, res) => {
       }
     });
 
-    // Create notification
+    // Create welcome notification
     await prisma.notification.create({
       data: {
         userId: user.id,
@@ -82,7 +104,7 @@ router.post('/register', async (req, res) => {
 
     // Generate token
     const token = jwt.sign(
-      { userId: user.id },
+      { userId: user.id, role: user.role },
       process.env.JWT_SECRET || 'upn-veteran-jwt-secret-key-2024',
       { expiresIn: '7d' }
     );
@@ -107,7 +129,7 @@ router.post('/register', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Registration error:', error);
+    console.error('[AUTH] Registration Error:', error);
     
     if (error.code === 'P2002') {
       return res.status(400).json({
@@ -116,29 +138,16 @@ router.post('/register', async (req, res) => {
       });
     }
 
-    // If table doesn't exist, create it
-    if (error.code === 'P2021' || error.code === 'P1001') {
-      console.log('Database table might not exist. Please run migrations.');
-      
-      return res.status(500).json({
-        success: false,
-        message: 'Database belum siap. Silakan coba lagi dalam beberapa saat.'
-      });
-    }
-
     res.status(500).json({
       success: false,
-      message: 'Terjadi kesalahan server',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Terjadi kesalahan server saat registrasi'
     });
   }
 });
 
-// SIMPLE LOGIN
+// LOGIN
 router.post('/login', async (req, res) => {
   try {
-    console.log('Login attempt:', req.body.email);
-    
     const { email, password } = req.body;
 
     if (!email || !password) {
@@ -172,7 +181,7 @@ router.post('/login', async (req, res) => {
 
     // Generate token
     const token = jwt.sign(
-      { userId: user.id },
+      { userId: user.id, role: user.role },
       process.env.JWT_SECRET || 'upn-veteran-jwt-secret-key-2024',
       { expiresIn: '7d' }
     );
@@ -197,19 +206,11 @@ router.post('/login', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Login error:', error);
+    console.error('[AUTH] Login Error:', error);
     
-    // Handle database errors
-    if (error.code === 'P2021' || error.code === 'P1001') {
-      return res.status(500).json({
-        success: false,
-        message: 'Database belum siap. Silakan coba lagi dalam beberapa saat.'
-      });
-    }
-
     res.status(500).json({
       success: false,
-      message: 'Terjadi kesalahan server'
+      message: 'Terjadi kesalahan server saat login'
     });
   }
 });
@@ -259,12 +260,12 @@ router.get('/me', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Get user error:', error);
+    console.error('[AUTH] Get Me Error:', error);
     
-    if (error.name === 'JsonWebTokenError') {
+    if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
       return res.status(401).json({
         success: false,
-        message: 'Token tidak valid'
+        message: 'Token tidak valid atau telah kadaluarsa'
       });
     }
 
