@@ -14,73 +14,63 @@ const app = express();
 
 // Security middleware
 app.use(helmet({
-  crossOriginResourcePolicy: { policy: "cross-origin" }, // Izinkan gambar dari origin lain
+  crossOriginResourcePolicy: false,
 }));
 
 // Compression untuk mempercepat response
 app.use(compression());
 
-// CORS configuration
+// CORS configuration yang lebih lengkap
 const corsOptions = {
-  origin: function (origin, callback) {
-    const allowedOrigins = [
-      'https://civitasfix.netlify.app',
-      'http://localhost:5173',
-      'http://localhost:5174'
-    ];
-    
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
-    
-    if (allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      console.log('CORS blocked for origin:', origin);
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
+  origin: [
+    'https://civitasfix.netlify.app',
+    'http://localhost:5173',
+    'http://localhost:5174',
+    'http://localhost:3000'
+  ],
   credentials: true,
-  optionsSuccessStatus: 200,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  exposedHeaders: ['Content-Disposition']
 };
 
-// Terapkan CORS untuk semua route
 app.use(cors(corsOptions));
 
 // Handle preflight requests
 app.options('*', cors(corsOptions));
 
 // Body parsing middleware
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Logging middleware
-app.use(morgan('combined'));
+app.use(morgan('dev'));
 
 // BUAT UPLOADS DIRECTORY JIKA BELUM ADA
-const uploadsDir = path.join(__dirname, 'uploads');
+const uploadsDir = path.join(__dirname, '../uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
   console.log('📁 Created uploads directory:', uploadsDir);
 }
 
-// Static files untuk uploads - TAMBAHKAN CORS HEADERS
-app.use('/uploads', (req, res, next) => {
-  // Set CORS headers untuk static files
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET');
-  res.header('Access-Control-Allow-Headers', 'Content-Type');
-  next();
-}, express.static(uploadsDir, {
-  maxAge: '1d', // Cache untuk 1 hari
+// Static files untuk uploads - PERBAIKAN PATH
+app.use('/uploads', express.static(path.join(__dirname, '../uploads'), {
+  maxAge: '7d',
   setHeaders: (res, filePath) => {
     // Set content type berdasarkan ekstensi file
     const ext = path.extname(filePath).toLowerCase();
-    if (ext === '.png') res.setHeader('Content-Type', 'image/png');
-    if (ext === '.jpg' || ext === '.jpeg') res.setHeader('Content-Type', 'image/jpeg');
-    if (ext === '.gif') res.setHeader('Content-Type', 'image/gif');
-    if (ext === '.webp') res.setHeader('Content-Type', 'image/webp');
+    const mimeTypes = {
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp',
+      '.pdf': 'application/pdf'
+    };
+    
+    if (mimeTypes[ext]) {
+      res.setHeader('Content-Type', mimeTypes[ext]);
+    }
   }
 }));
 
@@ -91,21 +81,21 @@ const reportRoutes = require('./routes/reports');
 const notificationRoutes = require('./routes/notifications');
 const statsRoutes = require('./routes/stats');
 
-// Routes dengan timeout handling
+// Routes dengan API prefix
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/stats', statsRoutes);
 
-// Test endpoint
-app.get('/test', (req, res) => {
+// Test endpoint dengan CORS headers
+app.get('/api/test', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
   res.json({
     success: true,
     message: 'Server is running',
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV,
-    databaseUrl: process.env.DATABASE_URL ? 'Configured' : 'Not configured',
     version: '2.0.0'
   });
 });
@@ -138,8 +128,7 @@ app.get('/api', (req, res) => {
         profile: 'GET /api/users/profile',
         updateProfile: 'PUT /api/users/profile',
         changePassword: 'POST /api/users/change-password',
-        lecturers: 'GET /api/users/lecturers',
-        test: 'GET /api/users/test'
+        lecturers: 'GET /api/users/lecturers'
       },
       reports: {
         list: 'GET /api/reports',
@@ -161,7 +150,7 @@ app.get('/api', (req, res) => {
         weekly: 'GET /api/stats/weekly'
       },
       system: {
-        health: 'GET /api/health',
+        health: 'GET /health',
         test: 'GET /test',
         uploads: 'GET /uploads/:filename'
       }
@@ -178,8 +167,7 @@ app.get('/', (req, res) => {
     frontend: 'https://civitasfix.netlify.app',
     documentation: '/api',
     health: '/health',
-    test: '/test',
-    uploads: '/uploads/:filename'
+    test: '/api/test'
   });
 });
 
@@ -194,7 +182,7 @@ app.use((req, res) => {
       'GET /',
       'GET /api',
       'GET /health',
-      'GET /test',
+      'GET /api/test',
       'POST /api/auth/register',
       'POST /api/auth/login',
       'GET /api/auth/me'
@@ -202,33 +190,7 @@ app.use((req, res) => {
   });
 });
 
-// Global timeout middleware
-app.use((req, res, next) => {
-  // Set timeout untuk 30 detik (30,000ms)
-  req.setTimeout(30000, () => {
-    console.log(`Request timeout: ${req.method} ${req.url}`);
-    if (!res.headersSent) {
-      res.status(504).json({
-        success: false,
-        message: 'Request timeout'
-      });
-    }
-  });
-  
-  res.setTimeout(30000, () => {
-    console.log(`Response timeout: ${req.method} ${req.url}`);
-    if (!res.headersSent) {
-      res.status(504).json({
-        success: false,
-        message: 'Response timeout'
-      });
-    }
-  });
-  
-  next();
-});
-
-// Error handling middleware
+// Global error handling middleware
 app.use((err, req, res, next) => {
   console.error('Server Error:', err.message);
   console.error(err.stack);
@@ -241,51 +203,11 @@ app.use((err, req, res, next) => {
     });
   }
   
-  // Handle timeout errors
-  if (err.code === 'ECONNABORTED' || err.message.includes('timeout')) {
-    return res.status(504).json({
-      success: false,
-      message: 'Request timeout'
-    });
-  }
-  
-  // Handle Prisma/DB errors
-  if (err.name === 'PrismaClientKnownRequestError') {
-    console.error('Database error:', err.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Database error occurred'
-    });
-  }
-  
-  // Handle JWT errors
-  if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
-    return res.status(401).json({
-      success: false,
-      message: 'Authentication error'
-    });
-  }
-  
   // Default error
   res.status(500).json({
     success: false,
     message: 'Internal server error',
     error: process.env.NODE_ENV === 'development' ? err.message : undefined
-  });
-});
-
-// Graceful shutdown handling
-process.on('SIGTERM', () => {
-  console.log('SIGTERM signal received: closing HTTP server');
-  server.close(() => {
-    console.log('HTTP server closed');
-  });
-});
-
-process.on('SIGINT', () => {
-  console.log('SIGINT signal received: closing HTTP server');
-  server.close(() => {
-    console.log('HTTP server closed');
   });
 });
 
@@ -297,6 +219,6 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`🌐 Environment: ${process.env.NODE_ENV || 'production'}`);
   console.log(`📁 Uploads directory: ${uploadsDir}`);
   console.log(`✅ Health check: https://civitasfix-backend.up.railway.app/health`);
-  console.log(`✅ Test endpoint: https://civitasfix-backend.up.railway.app/test`);
+  console.log(`✅ Test endpoint: https://civitasfix-backend.up.railway.app/api/test`);
   console.log(`📸 Image uploads: https://civitasfix-backend.up.railway.app/uploads/`);
 });
