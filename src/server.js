@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const helmet = require('helmet');
 const morgan = require('morgan');
+const compression = require('compression');
 
 // Load environment variables
 dotenv.config();
@@ -12,7 +13,12 @@ dotenv.config();
 const app = express();
 
 // Security middleware
-app.use(helmet());
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" }, // Izinkan gambar dari origin lain
+}));
+
+// Compression untuk mempercepat response
+app.use(compression());
 
 // CORS configuration
 const corsOptions = {
@@ -34,23 +40,49 @@ const corsOptions = {
     }
   },
   credentials: true,
-  optionsSuccessStatus: 200
+  optionsSuccessStatus: 200,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 };
 
+// Terapkan CORS untuk semua route
 app.use(cors(corsOptions));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+
+// Handle preflight requests
+app.options('*', cors(corsOptions));
+
+// Body parsing middleware
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Logging middleware
 app.use(morgan('combined'));
 
-// Static files for uploads
+// BUAT UPLOADS DIRECTORY JIKA BELUM ADA
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
-  console.log('📁 Created uploads directory');
+  console.log('📁 Created uploads directory:', uploadsDir);
 }
-app.use('/uploads', express.static(uploadsDir));
+
+// Static files untuk uploads - TAMBAHKAN CORS HEADERS
+app.use('/uploads', (req, res, next) => {
+  // Set CORS headers untuk static files
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  next();
+}, express.static(uploadsDir, {
+  maxAge: '1d', // Cache untuk 1 hari
+  setHeaders: (res, filePath) => {
+    // Set content type berdasarkan ekstensi file
+    const ext = path.extname(filePath).toLowerCase();
+    if (ext === '.png') res.setHeader('Content-Type', 'image/png');
+    if (ext === '.jpg' || ext === '.jpeg') res.setHeader('Content-Type', 'image/jpeg');
+    if (ext === '.gif') res.setHeader('Content-Type', 'image/gif');
+    if (ext === '.webp') res.setHeader('Content-Type', 'image/webp');
+  }
+}));
 
 // Import routes
 const authRoutes = require('./routes/auth');
@@ -59,7 +91,7 @@ const reportRoutes = require('./routes/reports');
 const notificationRoutes = require('./routes/notifications');
 const statsRoutes = require('./routes/stats');
 
-// Routes
+// Routes dengan timeout handling
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/reports', reportRoutes);
@@ -83,7 +115,9 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'OK',
     message: 'CivitasFix Backend is running',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    memory: process.memoryUsage()
   });
 });
 
@@ -144,7 +178,8 @@ app.get('/', (req, res) => {
     frontend: 'https://civitasfix.netlify.app',
     documentation: '/api',
     health: '/health',
-    test: '/test'
+    test: '/test',
+    uploads: '/uploads/:filename'
   });
 });
 
@@ -167,17 +202,33 @@ app.use((req, res) => {
   });
 });
 
+// Global timeout middleware
 app.use((req, res, next) => {
-    // Set timeout untuk 30 detik
-    req.setTimeout(30000, () => {
-        console.log(`Request timeout: ${req.method} ${req.url}`);
-    });
-    res.setTimeout(30000, () => {
-        console.log(`Response timeout: ${req.method} ${req.url}`);
-    });
-    next();
+  // Set timeout untuk 30 detik (30,000ms)
+  req.setTimeout(30000, () => {
+    console.log(`Request timeout: ${req.method} ${req.url}`);
+    if (!res.headersSent) {
+      res.status(504).json({
+        success: false,
+        message: 'Request timeout'
+      });
+    }
+  });
+  
+  res.setTimeout(30000, () => {
+    console.log(`Response timeout: ${req.method} ${req.url}`);
+    if (!res.headersSent) {
+      res.status(504).json({
+        success: false,
+        message: 'Response timeout'
+      });
+    }
+  });
+  
+  next();
 });
-// Error handling
+
+// Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Server Error:', err.message);
   console.error(err.stack);
@@ -190,6 +241,32 @@ app.use((err, req, res, next) => {
     });
   }
   
+  // Handle timeout errors
+  if (err.code === 'ECONNABORTED' || err.message.includes('timeout')) {
+    return res.status(504).json({
+      success: false,
+      message: 'Request timeout'
+    });
+  }
+  
+  // Handle Prisma/DB errors
+  if (err.name === 'PrismaClientKnownRequestError') {
+    console.error('Database error:', err.message);
+    return res.status(500).json({
+      success: false,
+      message: 'Database error occurred'
+    });
+  }
+  
+  // Handle JWT errors
+  if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
+    return res.status(401).json({
+      success: false,
+      message: 'Authentication error'
+    });
+  }
+  
+  // Default error
   res.status(500).json({
     success: false,
     message: 'Internal server error',
@@ -197,14 +274,29 @@ app.use((err, req, res, next) => {
   });
 });
 
+// Graceful shutdown handling
+process.on('SIGTERM', () => {
+  console.log('SIGTERM signal received: closing HTTP server');
+  server.close(() => {
+    console.log('HTTP server closed');
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('SIGINT signal received: closing HTTP server');
+  server.close(() => {
+    console.log('HTTP server closed');
+  });
+});
+
 const PORT = process.env.PORT || 5000;
 
 // Start server
-app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`🌐 Environment: ${process.env.NODE_ENV || 'production'}`);
   console.log(`📁 Uploads directory: ${uploadsDir}`);
-  console.log(`✅ Health check: http://localhost:${PORT}/health`);
-  console.log(`✅ Test endpoint: http://localhost:${PORT}/test`);
+  console.log(`✅ Health check: https://civitasfix-backend.up.railway.app/health`);
+  console.log(`✅ Test endpoint: https://civitasfix-backend.up.railway.app/test`);
+  console.log(`📸 Image uploads: https://civitasfix-backend.up.railway.app/uploads/`);
 });
-
