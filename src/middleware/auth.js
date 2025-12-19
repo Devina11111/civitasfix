@@ -1,44 +1,36 @@
 const jwt = require('jsonwebtoken');
-const { PrismaClient } = require('@prisma/client');
 
-const prisma = new PrismaClient();
-
-const authenticate = async (req, res, next) => {
+const authenticate = (req, res, next) => {
     try {
-        const token = req.headers.authorization?.replace('Bearer ', '');
-
-        if (!token) {
+        const authHeader = req.headers.authorization;
+        
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
             return res.status(401).json({
                 success: false,
                 message: 'Token tidak ditemukan'
             });
         }
 
-        // Verify token
-        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
+        const token = authHeader.replace('Bearer ', '');
         
-        const user = await prisma.user.findUnique({
-            where: { id: decoded.userId },
-            select: {
-                id: true,
-                email: true,
-                name: true,
-                role: true,
-                isVerified: true
-            }
-        });
-
-        if (!user) {
+        if (!token) {
             return res.status(401).json({
                 success: false,
-                message: 'User tidak ditemukan'
+                message: 'Token tidak valid'
             });
         }
 
-        // Tidak perlu cek isVerified karena langsung aktif
-        req.user = user;
+        // Verify token
+        const decoded = jwt.verify(
+            token,
+            process.env.JWT_SECRET || 'upn-veteran-jwt-secret-key-2024'
+        );
+
+        req.user = decoded;
         next();
     } catch (error) {
+        console.error('Authentication error:', error);
+        
         if (error.name === 'JsonWebTokenError') {
             return res.status(401).json({
                 success: false,
@@ -46,22 +38,36 @@ const authenticate = async (req, res, next) => {
             });
         }
         
-        console.error('Authentication error:', error);
-        res.status(500).json({
+        if (error.name === 'TokenExpiredError') {
+            return res.status(401).json({
+                success: false,
+                message: 'Token telah kadaluarsa'
+            });
+        }
+
+        return res.status(401).json({
             success: false,
-            message: 'Terjadi kesalahan server'
+            message: 'Autentikasi gagal'
         });
     }
 };
 
 const authorize = (...roles) => {
     return (req, res, next) => {
+        if (!req.user) {
+            return res.status(401).json({
+                success: false,
+                message: 'Anda harus login terlebih dahulu'
+            });
+        }
+
         if (!roles.includes(req.user.role)) {
             return res.status(403).json({
                 success: false,
-                message: 'Akses ditolak: Anda tidak memiliki izin'
+                message: 'Anda tidak memiliki izin untuk mengakses ini'
             });
         }
+
         next();
     };
 };
