@@ -1,31 +1,66 @@
 const express = require('express');
 const { PrismaClient } = require('@prisma/client');
-const jwt = require('jsonwebtoken');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 
 const router = express.Router();
 const prisma = new PrismaClient();
 
+// Setup multer untuk upload file
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        const uploadDir = 'uploads/';
+        // Buat direktori jika belum ada
+        if (!fs.existsSync(uploadDir)) {
+            fs.mkdirSync(uploadDir, { recursive: true });
+        }
+        cb(null, uploadDir);
+    },
+    filename: function (req, file, cb) {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+    }
+});
+
+const upload = multer({
+    storage: storage,
+    limits: {
+        fileSize: 5 * 1024 * 1024 // 5MB limit
+    },
+    fileFilter: function (req, file, cb) {
+        // Hanya terima file gambar
+        if (file.mimetype.startsWith('image/')) {
+            cb(null, true);
+        } else {
+            cb(new Error('Hanya file gambar yang diperbolehkan'), false);
+        }
+    }
+});
+
 // Middleware untuk autentikasi
 const authenticate = async (req, res, next) => {
-  try {
-    const token = req.headers.authorization?.replace('Bearer ', '');
-    
-    if (!token) {
-      return res.status(401).json({ 
-        success: false, 
-        message: 'Token tidak ditemukan' 
-      });
-    }
+    try {
+        const token = req.headers.authorization?.replace('Bearer ', '');
+        
+        if (!token) {
+            return res.status(401).json({ 
+                success: false, 
+                message: 'Token tidak ditemukan' 
+            });
+        }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'civitasfix-secret-key');
-    req.userId = decoded.userId;
-    next();
-  } catch (error) {
-    res.status(401).json({ 
-      success: false, 
-      message: 'Token tidak valid' 
-    });
-  }
+        const jwt = require('jsonwebtoken');
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'civitasfix-secret-key');
+        req.userId = decoded.userId;
+        next();
+    } catch (error) {
+        console.error('Auth error:', error);
+        res.status(401).json({ 
+            success: false, 
+            message: 'Token tidak valid' 
+        });
+    }
 };
 
 // Get all reports (with pagination and filters)
@@ -38,7 +73,7 @@ router.get('/', authenticate, async (req, res) => {
 
         // Get user role
         const user = await prisma.user.findUnique({
-          where: { id: req.userId }
+            where: { id: req.userId }
         });
 
         if (user.role === 'STUDENT') {
@@ -110,7 +145,7 @@ router.get('/:id', authenticate, async (req, res) => {
 
         // Get user role
         const user = await prisma.user.findUnique({
-          where: { id: req.userId }
+            where: { id: req.userId }
         });
 
         // Check permissions
@@ -125,10 +160,10 @@ router.get('/:id', authenticate, async (req, res) => {
     }
 });
 
-// Create report (Student only)
-router.post('/', authenticate, async (req, res) => {
+// Create report dengan upload gambar (Student only)
+router.post('/', authenticate, upload.single('image'), async (req, res) => {
     try {
-        const { title, description, location, category, priority, imageUrl } = req.body;
+        const { title, description, location, category, priority } = req.body;
 
         if (!title || !description || !location) {
             return res.status(400).json({ success: false, message: 'Judul, deskripsi, dan lokasi harus diisi' });
@@ -136,11 +171,17 @@ router.post('/', authenticate, async (req, res) => {
 
         // Check user role
         const user = await prisma.user.findUnique({
-          where: { id: req.userId }
+            where: { id: req.userId }
         });
 
         if (user.role !== 'STUDENT') {
-          return res.status(403).json({ success: false, message: 'Hanya mahasiswa yang dapat membuat laporan' });
+            return res.status(403).json({ success: false, message: 'Hanya mahasiswa yang dapat membuat laporan' });
+        }
+
+        let imageUrl = null;
+        if (req.file) {
+            // Simpan URL gambar (relatif)
+            imageUrl = `/uploads/${req.file.filename}`;
         }
 
         const report = await prisma.report.create({
@@ -175,6 +216,23 @@ router.post('/', authenticate, async (req, res) => {
             }
         });
 
+        // Buat notifikasi untuk dosen jika ada
+        const lecturers = await prisma.user.findMany({
+            where: { role: 'LECTURER' }
+        });
+
+        for (const lecturer of lecturers) {
+            await prisma.notification.create({
+                data: {
+                    userId: lecturer.id,
+                    title: 'Laporan Baru',
+                    message: `Mahasiswa ${user.name} membuat laporan baru: "${title}".`,
+                    type: 'INFO',
+                    link: `/reports/${report.id}`
+                }
+            });
+        }
+
         res.status(201).json({
             success: true,
             message: 'Laporan berhasil dibuat',
@@ -182,6 +240,14 @@ router.post('/', authenticate, async (req, res) => {
         });
     } catch (error) {
         console.error('Create report error:', error);
+        
+        // Hapus file jika ada error
+        if (req.file && req.file.path) {
+            fs.unlink(req.file.path, (err) => {
+                if (err) console.error('Error deleting file:', err);
+            });
+        }
+
         res.status(500).json({ success: false, message: 'Internal server error' });
     }
 });
@@ -194,11 +260,11 @@ router.patch('/:id/status', authenticate, async (req, res) => {
 
         // Check user role
         const user = await prisma.user.findUnique({
-          where: { id: req.userId }
+            where: { id: req.userId }
         });
 
         if (!['LECTURER', 'ADMIN'].includes(user.role)) {
-          return res.status(403).json({ success: false, message: 'Hanya dosen atau admin yang dapat mengubah status' });
+            return res.status(403).json({ success: false, message: 'Hanya dosen atau admin yang dapat mengubah status' });
         }
 
         const report = await prisma.report.findUnique({
@@ -238,6 +304,61 @@ router.patch('/:id/status', authenticate, async (req, res) => {
     }
 });
 
+// Update repair notes (Lecturer only)
+router.patch('/:id/repair', authenticate, async (req, res) => {
+    try {
+        const { repairNotes, estimatedCost } = req.body;
+        const reportId = parseInt(req.params.id);
+
+        // Check user role
+        const user = await prisma.user.findUnique({
+            where: { id: req.userId }
+        });
+
+        if (user.role !== 'LECTURER') {
+            return res.status(403).json({ success: false, message: 'Hanya dosen yang dapat menambahkan catatan perbaikan' });
+        }
+
+        const report = await prisma.report.findUnique({
+            where: { id: reportId }
+        });
+
+        if (!report) {
+            return res.status(404).json({ success: false, message: 'Laporan tidak ditemukan' });
+        }
+
+        const updateData = {};
+        if (repairNotes !== undefined) updateData.repairNotes = repairNotes;
+        if (estimatedCost !== undefined) updateData.estimatedCost = estimatedCost;
+
+        const updatedReport = await prisma.report.update({
+            where: { id: reportId },
+            data: updateData
+        });
+
+        // Create notification for student
+        await prisma.notification.create({
+            data: {
+                userId: report.userId,
+                title: 'Catatan Perbaikan Ditambahkan',
+                message: `Dosen menambahkan catatan perbaikan untuk laporan "${report.title}".`,
+                type: 'INFO',
+                reportId,
+                link: `/reports/${report.id}`
+            }
+        });
+
+        res.json({
+            success: true,
+            message: 'Catatan perbaikan berhasil disimpan',
+            report: updatedReport
+        });
+    } catch (error) {
+        console.error('Update repair error:', error);
+        res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+});
+
 // Get latest reports for dashboard
 router.get('/dashboard/latest', authenticate, async (req, res) => {
     try {
@@ -245,7 +366,7 @@ router.get('/dashboard/latest', authenticate, async (req, res) => {
 
         // Check user role
         const user = await prisma.user.findUnique({
-          where: { id: req.userId }
+            where: { id: req.userId }
         });
 
         if (user.role === 'STUDENT') {
