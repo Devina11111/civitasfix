@@ -16,7 +16,8 @@ router.get('/test', (req, res) => {
             profile: 'GET /api/users/profile',
             updateProfile: 'PUT /api/users/profile',
             changePassword: 'POST /api/users/change-password',
-            lecturers: 'GET /api/users/lecturers'
+            lecturers: 'GET /api/users/lecturers',
+            userById: 'GET /api/users/:id'
         }
     });
 });
@@ -136,28 +137,24 @@ router.put('/profile', authenticate, async (req, res) => {
         const updateData = { name: name.trim() };
 
         // Validate and update based on role
-        if (req.user.role === 'STUDENT') {
-            if (nim && nim.trim() !== '') {
-                if (nim.trim().length < 8) {
-                    return res.status(400).json({
-                        success: false,
-                        message: 'NPM minimal 8 karakter'
-                    });
-                }
-                updateData.nim = nim.trim();
+        if (req.user.role === 'STUDENT' && nim && nim.trim() !== '') {
+            if (nim.trim().length < 8) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'NPM minimal 8 karakter'
+                });
             }
+            updateData.nim = nim.trim();
         }
 
-        if (req.user.role === 'LECTURER') {
-            if (nidn && nidn.trim() !== '') {
-                if (nidn.trim().length < 10) {
-                    return res.status(400).json({
-                        success: false,
-                        message: 'NIP minimal 10 karakter'
-                    });
-                }
-                updateData.nidn = nidn.trim();
+        if (req.user.role === 'LECTURER' && nidn && nidn.trim() !== '') {
+            if (nidn.trim().length < 10) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'NIP minimal 10 karakter'
+                });
             }
+            updateData.nidn = nidn.trim();
         }
 
         const user = await prisma.user.update({
@@ -298,16 +295,27 @@ router.get('/lecturers', authenticate, async (req, res) => {
     }
 });
 
-// Get user by ID (for internal use)
+// Get user by ID (for internal use - lecturers/admins only)
 router.get('/:id', authenticate, async (req, res) => {
     try {
         const userId = parseInt(req.params.id);
         
-        if (req.user.role !== 'LECTURER' && req.user.role !== 'ADMIN') {
-            return res.status(403).json({
+        if (isNaN(userId)) {
+            return res.status(400).json({
                 success: false,
-                message: 'Anda tidak memiliki izin untuk mengakses data user'
+                message: 'ID user tidak valid'
             });
+        }
+
+        // Only lecturers and admins can view other users
+        if (req.user.role !== 'LECTURER' && req.user.role !== 'ADMIN') {
+            // Users can only view their own profile
+            if (req.user.id !== userId) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Anda tidak memiliki izin untuk mengakses data user lain'
+                });
+            }
         }
 
         const user = await prisma.user.findUnique({
@@ -320,7 +328,8 @@ router.get('/:id', authenticate, async (req, res) => {
                 nim: true,
                 nidn: true,
                 isVerified: true,
-                createdAt: true
+                createdAt: true,
+                updatedAt: true
             }
         });
 
