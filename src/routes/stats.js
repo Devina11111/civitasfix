@@ -1,55 +1,26 @@
 const express = require('express');
 const { PrismaClient } = require('@prisma/client');
-const jwt = require('jsonwebtoken');
+const { authenticate } = require('../middleware/auth');
 
 const router = express.Router();
 const prisma = new PrismaClient();
 
-// Middleware untuk autentikasi
-const authenticate = async (req, res, next) => {
-  try {
-    const token = req.headers.authorization?.replace('Bearer ', '');
-    
-    if (!token) {
-      return res.status(401).json({ 
-        success: false, 
-        message: 'Token tidak ditemukan' 
-      });
-    }
-
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'civitasfix-secret-key');
-    req.userId = decoded.userId;
-    next();
-  } catch (error) {
-    res.status(401).json({ 
-      success: false, 
-      message: 'Token tidak valid' 
-    });
-  }
-};
-
-// Get stats summary
+// GET stats summary
 router.get('/summary', authenticate, async (req, res) => {
     try {
-        const user = await prisma.user.findUnique({
-          where: { id: req.userId }
-        });
-
         let where = {};
-        if (user.role === 'STUDENT') {
-            where.userId = req.userId;
+        
+        // Perbaikan: Gunakan req.user dari middleware
+        if (req.user.role === 'STUDENT') {
+            where.userId = req.user.id;
         }
 
-        const [
-          total,
-          pending,
-          inProgress,
-          completed
-        ] = await Promise.all([
-          prisma.report.count({ where }),
-          prisma.report.count({ where: { ...where, status: 'PENDING' } }),
-          prisma.report.count({ where: { ...where, status: 'IN_PROGRESS' } }),
-          prisma.report.count({ where: { ...where, status: 'COMPLETED' } })
+        const [total, pending, inProgress, completed, rejected] = await Promise.all([
+            prisma.report.count({ where }),
+            prisma.report.count({ where: { ...where, status: 'PENDING' } }),
+            prisma.report.count({ where: { ...where, status: 'IN_PROGRESS' } }),
+            prisma.report.count({ where: { ...where, status: 'COMPLETED' } }),
+            prisma.report.count({ where: { ...where, status: 'REJECTED' } })
         ]);
 
         res.json({
@@ -59,26 +30,26 @@ router.get('/summary', authenticate, async (req, res) => {
                 pending,
                 inProgress,
                 completed,
-                weekly: Math.floor(total * 0.4), // Contoh statistik
-                monthly: Math.floor(total * 0.8) // Contoh statistik
+                rejected
             }
         });
     } catch (error) {
         console.error('Get stats error:', error);
-        res.status(500).json({ success: false, message: 'Internal server error' });
+        res.status(500).json({ 
+            success: false, 
+            message: 'Internal server error',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
     }
 });
 
-// Get weekly stats
+// GET weekly stats
 router.get('/weekly', authenticate, async (req, res) => {
     try {
-        const user = await prisma.user.findUnique({
-          where: { id: req.userId }
-        });
-
         let where = {};
-        if (user.role === 'STUDENT') {
-            where.userId = req.userId;
+        
+        if (req.user.role === 'STUDENT') {
+            where.userId = req.user.id;
         }
 
         // Count by status
@@ -113,7 +84,11 @@ router.get('/weekly', authenticate, async (req, res) => {
         });
     } catch (error) {
         console.error('Get weekly stats error:', error);
-        res.status(500).json({ success: false, message: 'Internal server error' });
+        res.status(500).json({ 
+            success: false, 
+            message: 'Internal server error',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
     }
 });
 
