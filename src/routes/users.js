@@ -1,13 +1,23 @@
 const express = require('express');
 const { PrismaClient } = require('@prisma/client');
-const { authenticate, authorize } = require('../middleware/auth');
-
+const { authenticate } = require('../middleware/auth');
 const router = express.Router();
 const prisma = new PrismaClient();
+
+// Test endpoint
+router.get('/test', (req, res) => {
+    res.json({
+        success: true,
+        message: 'Users endpoint is working',
+        timestamp: new Date().toISOString()
+    });
+});
 
 // Get user profile
 router.get('/profile', authenticate, async (req, res) => {
     try {
+        console.log('Getting profile for user:', req.user.id);
+        
         const user = await prisma.user.findUnique({
             where: { id: req.user.id },
             select: {
@@ -23,10 +33,23 @@ router.get('/profile', authenticate, async (req, res) => {
             }
         });
 
-        res.json({ success: true, user });
+        if (!user) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'User not found' 
+            });
+        }
+
+        res.json({ 
+            success: true, 
+            user 
+        });
     } catch (error) {
         console.error('Get profile error:', error);
-        res.status(500).json({ success: false, message: 'Internal server error' });
+        res.status(500).json({ 
+            success: false, 
+            message: 'Internal server error' 
+        });
     }
 });
 
@@ -66,7 +89,18 @@ router.put('/profile', authenticate, async (req, res) => {
         });
     } catch (error) {
         console.error('Update profile error:', error);
-        res.status(500).json({ success: false, message: 'Internal server error' });
+        
+        if (error.code === 'P2025') {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'User not found' 
+            });
+        }
+        
+        res.status(500).json({ 
+            success: false, 
+            message: 'Internal server error' 
+        });
     }
 });
 
@@ -76,11 +110,17 @@ router.post('/change-password', authenticate, async (req, res) => {
         const { currentPassword, newPassword } = req.body;
 
         if (!currentPassword || !newPassword) {
-            return res.status(400).json({ success: false, message: 'Password saat ini dan password baru harus diisi' });
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Password saat ini dan password baru harus diisi' 
+            });
         }
 
         if (newPassword.length < 6) {
-            return res.status(400).json({ success: false, message: 'Password baru minimal 6 karakter' });
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Password baru minimal 6 karakter' 
+            });
         }
 
         // Get user with password
@@ -88,11 +128,21 @@ router.post('/change-password', authenticate, async (req, res) => {
             where: { id: req.user.id }
         });
 
+        if (!user) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'User not found' 
+            });
+        }
+
         const bcrypt = require('bcryptjs');
         const isValid = await bcrypt.compare(currentPassword, user.password);
 
         if (!isValid) {
-            return res.status(400).json({ success: false, message: 'Password saat ini salah' });
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Password saat ini salah' 
+            });
         }
 
         const hashedPassword = await bcrypt.hash(newPassword, 10);
@@ -108,7 +158,10 @@ router.post('/change-password', authenticate, async (req, res) => {
         });
     } catch (error) {
         console.error('Change password error:', error);
-        res.status(500).json({ success: false, message: 'Internal server error' });
+        res.status(500).json({ 
+            success: false, 
+            message: 'Internal server error' 
+        });
     }
 });
 
@@ -130,7 +183,10 @@ router.get('/lecturers', authenticate, async (req, res) => {
         res.json({ success: true, lecturers });
     } catch (error) {
         console.error('Get lecturers error:', error);
-        res.status(500).json({ success: false, message: 'Internal server error' });
+        res.status(500).json({ 
+            success: false, 
+            message: 'Internal server error' 
+        });
     }
 });
 
