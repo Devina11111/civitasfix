@@ -7,26 +7,18 @@ const router = express.Router();
 const prisma = new PrismaClient();
 
 // Test endpoint
-router.get('/test', (req, res) => {
+router.get('/test', authenticate, (req, res) => {
     res.json({
         success: true,
         message: 'Users endpoint is working',
-        timestamp: new Date().toISOString(),
-        endpoints: {
-            profile: 'GET /api/users/profile',
-            updateProfile: 'PUT /api/users/profile',
-            changePassword: 'POST /api/users/change-password',
-            lecturers: 'GET /api/users/lecturers',
-            userById: 'GET /api/users/:id'
-        }
+        user: req.user,
+        timestamp: new Date().toISOString()
     });
 });
 
 // Get user profile
 router.get('/profile', authenticate, async (req, res) => {
     try {
-        console.log('Getting profile for user:', req.user.id);
-        
         const user = await prisma.user.findUnique({
             where: { id: req.user.id },
             select: {
@@ -49,61 +41,34 @@ router.get('/profile', authenticate, async (req, res) => {
             });
         }
 
-        // Get report statistics based on user role
-        let statistics = {
-            totalReports: 0,
-            activeReports: 0,
-            completedReports: 0,
-            pendingReports: 0
-        };
+        // Get report statistics
+        let statistics = { totalReports: 0, activeReports: 0, completedReports: 0, pendingReports: 0 };
+        const reportWhere = req.user.role === 'STUDENT' ? { userId: req.user.id } : {};
 
-        if (req.user.role === 'STUDENT') {
-            // For students, only count their own reports
-            statistics.totalReports = await prisma.report.count({
-                where: { userId: req.user.id }
-            });
+        if (req.user.role === 'STUDENT' || req.user.role === 'LECTURER' || req.user.role === 'ADMIN') {
+            const [total, active, completed, pending] = await Promise.all([
+                prisma.report.count({ where: reportWhere }),
+                prisma.report.count({ 
+                    where: { 
+                        ...reportWhere,
+                        status: { in: ['CONFIRMED', 'IN_PROGRESS'] }
+                    }
+                }),
+                prisma.report.count({ 
+                    where: { 
+                        ...reportWhere,
+                        status: 'COMPLETED'
+                    }
+                }),
+                prisma.report.count({ 
+                    where: { 
+                        ...reportWhere,
+                        status: 'PENDING'
+                    }
+                })
+            ]);
 
-            statistics.activeReports = await prisma.report.count({
-                where: { 
-                    userId: req.user.id,
-                    status: { in: ['CONFIRMED', 'IN_PROGRESS'] }
-                }
-            });
-
-            statistics.completedReports = await prisma.report.count({
-                where: { 
-                    userId: req.user.id,
-                    status: 'COMPLETED'
-                }
-            });
-
-            statistics.pendingReports = await prisma.report.count({
-                where: { 
-                    userId: req.user.id,
-                    status: 'PENDING'
-                }
-            });
-        } else if (req.user.role === 'LECTURER') {
-            // For lecturers, count all reports
-            statistics.totalReports = await prisma.report.count();
-            
-            statistics.activeReports = await prisma.report.count({
-                where: { 
-                    status: { in: ['CONFIRMED', 'IN_PROGRESS'] }
-                }
-            });
-
-            statistics.completedReports = await prisma.report.count({
-                where: { 
-                    status: 'COMPLETED'
-                }
-            });
-
-            statistics.pendingReports = await prisma.report.count({
-                where: { 
-                    status: 'PENDING'
-                }
-            });
+            statistics = { totalReports: total, activeReports: active, completedReports: completed, pendingReports: pending };
         }
 
         res.json({ 
@@ -114,10 +79,10 @@ router.get('/profile', authenticate, async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('Get profile error:', error);
+        console.error('[USERS] GET /profile Error:', error);
         res.status(500).json({ 
             success: false, 
-            message: 'Terjadi kesalahan server' 
+            message: 'Gagal mengambil data profil' 
         });
     }
 });
@@ -136,12 +101,12 @@ router.put('/profile', authenticate, async (req, res) => {
 
         const updateData = { name: name.trim() };
 
-        // Validate and update based on role
+        // Validasi berdasarkan role
         if (req.user.role === 'STUDENT' && nim && nim.trim() !== '') {
             if (nim.trim().length < 8) {
                 return res.status(400).json({
                     success: false,
-                    message: 'NPM minimal 8 karakter'
+                    message: 'NIM minimal 8 karakter'
                 });
             }
             updateData.nim = nim.trim();
@@ -151,7 +116,7 @@ router.put('/profile', authenticate, async (req, res) => {
             if (nidn.trim().length < 10) {
                 return res.status(400).json({
                     success: false,
-                    message: 'NIP minimal 10 karakter'
+                    message: 'NIDN minimal 10 karakter'
                 });
             }
             updateData.nidn = nidn.trim();
@@ -178,7 +143,7 @@ router.put('/profile', authenticate, async (req, res) => {
             user
         });
     } catch (error) {
-        console.error('Update profile error:', error);
+        console.error('[USERS] PUT /profile Error:', error);
         
         if (error.code === 'P2025') {
             return res.status(404).json({ 
@@ -189,7 +154,7 @@ router.put('/profile', authenticate, async (req, res) => {
         
         res.status(500).json({ 
             success: false, 
-            message: 'Terjadi kesalahan server' 
+            message: 'Gagal memperbarui profil' 
         });
     }
 });
@@ -234,20 +199,11 @@ router.post('/change-password', authenticate, async (req, res) => {
             });
         }
 
-        // Check if new password is same as old password
-        const isSamePassword = await bcrypt.compare(newPassword, user.password);
-        if (isSamePassword) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Password baru tidak boleh sama dengan password lama' 
-            });
-        }
-
         const hashedPassword = await bcrypt.hash(newPassword, 10);
 
         await prisma.user.update({
             where: { id: req.user.id },
-            data: { password: hashedPassword }
+            data: { password: hashedPassword, updatedAt: new Date() }
         });
 
         res.json({
@@ -255,15 +211,15 @@ router.post('/change-password', authenticate, async (req, res) => {
             message: 'Password berhasil diubah'
         });
     } catch (error) {
-        console.error('Change password error:', error);
+        console.error('[USERS] POST /change-password Error:', error);
         res.status(500).json({ 
             success: false, 
-            message: 'Terjadi kesalahan server' 
+            message: 'Gagal mengubah password' 
         });
     }
 });
 
-// Get all lecturers (for students to see)
+// Get all lecturers
 router.get('/lecturers', authenticate, async (req, res) => {
     try {
         const lecturers = await prisma.user.findMany({
@@ -287,15 +243,15 @@ router.get('/lecturers', authenticate, async (req, res) => {
             count: lecturers.length
         });
     } catch (error) {
-        console.error('Get lecturers error:', error);
+        console.error('[USERS] GET /lecturers Error:', error);
         res.status(500).json({ 
             success: false, 
-            message: 'Terjadi kesalahan server' 
+            message: 'Gagal mengambil data dosen' 
         });
     }
 });
 
-// Get user by ID (for internal use - lecturers/admins only)
+// Get user by ID
 router.get('/:id', authenticate, async (req, res) => {
     try {
         const userId = parseInt(req.params.id);
@@ -307,15 +263,12 @@ router.get('/:id', authenticate, async (req, res) => {
             });
         }
 
-        // Only lecturers and admins can view other users
-        if (req.user.role !== 'LECTURER' && req.user.role !== 'ADMIN') {
-            // Users can only view their own profile
-            if (req.user.id !== userId) {
-                return res.status(403).json({
-                    success: false,
-                    message: 'Anda tidak memiliki izin untuk mengakses data user lain'
-                });
-            }
+        // Authorization check
+        if (req.user.role !== 'LECTURER' && req.user.role !== 'ADMIN' && req.user.id !== userId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Anda tidak memiliki izin untuk mengakses data user lain'
+            });
         }
 
         const user = await prisma.user.findUnique({
@@ -342,10 +295,10 @@ router.get('/:id', authenticate, async (req, res) => {
 
         res.json({ success: true, user });
     } catch (error) {
-        console.error('Get user by ID error:', error);
+        console.error('[USERS] GET /:id Error:', error);
         res.status(500).json({ 
             success: false, 
-            message: 'Terjadi kesalahan server' 
+            message: 'Gagal mengambil data user' 
         });
     }
 });
