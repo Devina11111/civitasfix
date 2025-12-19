@@ -65,16 +65,10 @@ CREATE TABLE "notifications" (
 CREATE UNIQUE INDEX "users_email_key" ON "users"("email");
 
 -- CreateIndex
-CREATE INDEX "users_email_idx" ON "users"("email");
-
--- CreateIndex
 CREATE INDEX "reports_userId_idx" ON "reports"("userId");
 
 -- CreateIndex
 CREATE INDEX "reports_status_idx" ON "reports"("status");
-
--- CreateIndex
-CREATE INDEX "reports_createdAt_idx" ON "reports"("createdAt");
 
 -- CreateIndex
 CREATE INDEX "notifications_userId_idx" ON "notifications"("userId");
@@ -87,3 +81,6 @@ ALTER TABLE "reports" ADD CONSTRAINT "reports_userId_fkey" FOREIGN KEY ("userId"
 
 -- AddForeignKey
 ALTER TABLE "notifications" ADD CONSTRAINT "notifications_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "notifications" ADD CONSTRAINT "notifications_reportId_fkey" FOREIGN KEY ("reportId") REFERENCES "reports"("id") ON DELETE SET NULL ON UPDATE CASCADE;
