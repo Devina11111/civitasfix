@@ -1,11 +1,13 @@
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
+const { PrismaClient } = require('@prisma/client');
 
 // Load environment variables
 dotenv.config();
 
 const app = express();
+const prisma = new PrismaClient();
 
 // Middleware
 app.use(cors({
@@ -16,16 +18,33 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Import routes
-const authRoutes = require('./src/routes/auth');
-const reportRoutes = require('./src/routes/reports');
-const notificationRoutes = require('./src/routes/notifications');
-const statsRoutes = require('./src/routes/stats');
+// Test database connection
+const testDatabase = async () => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    console.log('✅ Database connected successfully');
+    return true;
+  } catch (error) {
+    console.error('❌ Database connection failed:', error.message);
+    return false;
+  }
+};
 
-// Logging middleware
-app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
-  next();
+// Import routes
+const authRoutes = require('./routes/auth');
+const reportRoutes = require('./routes/reports');
+const notificationRoutes = require('./routes/notifications');
+const statsRoutes = require('./routes/stats');
+
+// Test endpoint untuk memastikan server bekerja
+app.get('/test', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Server is running',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV,
+    database: process.env.DATABASE_URL ? 'Configured' : 'Not configured'
+  });
 });
 
 // Routes
@@ -34,33 +53,31 @@ app.use('/api/reports', reportRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/stats', statsRoutes);
 
-// Health check endpoint
-app.get('/api/health', (req, res) => {
+// Health check dengan database test
+app.get('/api/health', async (req, res) => {
+  const dbConnected = await testDatabase();
+  
   res.json({
-    status: 'OK',
-    message: 'CivitasFix Backend API is running',
+    status: dbConnected ? 'OK' : 'ERROR',
+    message: dbConnected ? 'CivitasFix Backend API is running' : 'Database connection failed',
     version: '2.0.0',
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'production',
-    database: 'Connected',
-    emailSystem: 'Disabled - Using internal notifications'
-  });
-});
-
-// Test endpoint
-app.get('/test', (req, res) => {
-  res.json({
-    message: 'Test endpoint working',
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV
+    database: dbConnected ? 'Connected' : 'Disconnected',
+    features: {
+      registration: 'Instant activation (no email verification)',
+      notifications: 'Internal website system',
+      authentication: 'JWT token based'
+    }
   });
 });
 
 // API Documentation
 app.get('/api', (req, res) => {
   res.json({
-    message: 'CivitasFix API v2.0',
+    message: 'CivitasFix API v2.0 - UPN Veteran Jawa Timur',
     version: '2.0.0',
+    status: 'Active',
     endpoints: {
       auth: {
         register: 'POST /api/auth/register',
@@ -87,34 +104,29 @@ app.get('/api', (req, res) => {
 // Root endpoint
 app.get('/', (req, res) => {
   res.json({
-    message: 'Welcome to CivitasFix Backend API',
+    message: 'CivitasFix Backend API - UPN Veteran Jawa Timur',
     version: '2.0.0',
     status: 'Running',
-    endpoints: {
-      api_docs: '/api',
-      health_check: '/api/health',
-      test: '/test'
-    }
+    frontend: 'https://civitasfix.netlify.app',
+    documentation: '/api',
+    health: '/api/health'
   });
 });
 
 // 404 handler
-app.use((req, res) => {
-  console.log(`[404] Route not found: ${req.method} ${req.url}`);
+app.use('*', (req, res) => {
   res.status(404).json({
     success: false,
     message: 'Endpoint not found',
-    requested: `${req.method} ${req.url}`,
+    requested: `${req.method} ${req.originalUrl}`,
     available_endpoints: [
       'GET /',
       'GET /api',
       'GET /api/health',
+      'GET /test',
       'POST /api/auth/register',
       'POST /api/auth/login',
-      'GET /api/auth/me',
-      'GET /api/reports',
-      'POST /api/reports',
-      'GET /api/notifications'
+      'GET /api/auth/me'
     ]
   });
 });
@@ -131,9 +143,30 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📡 Environment: ${process.env.NODE_ENV || 'production'}`);
-  console.log(`✅ Health: http://localhost:${PORT}/api/health`);
-  console.log(`🔑 Test: http://localhost:${PORT}/test`);
-});
+// Start server
+const startServer = async () => {
+  try {
+    // Test database connection
+    const dbConnected = await testDatabase();
+    
+    if (!dbConnected) {
+      console.error('⚠️  Cannot start server: Database connection failed');
+      console.log('💡 TIPS: Check DATABASE_URL in Railway Variables');
+      process.exit(1);
+    }
+
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`🚀 Server running on port ${PORT}`);
+      console.log(`📡 Environment: ${process.env.NODE_ENV || 'production'}`);
+      console.log(`🌐 CORS Origin: https://civitasfix.netlify.app`);
+      console.log(`✅ Health: http://localhost:${PORT}/api/health`);
+      console.log(`🔗 Test: http://localhost:${PORT}/test`);
+      console.log(`💾 Database: ${process.env.DATABASE_URL ? 'Connected' : 'Not configured'}`);
+    });
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  }
+};
+
+startServer();
