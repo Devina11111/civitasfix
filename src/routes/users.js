@@ -263,44 +263,4 @@ router.get('/:id', authenticate, async (req, res) => {
             });
         }
 
-        // Authorization check
-        if (req.user.role !== 'LECTURER' && req.user.role !== 'ADMIN' && req.user.id !== userId) {
-            return res.status(403).json({
-                success: false,
-                message: 'Anda tidak memiliki izin untuk mengakses data user lain'
-            });
-        }
-
-        const user = await prisma.user.findUnique({
-            where: { id: userId },
-            select: {
-                id: true,
-                name: true,
-                email: true,
-                role: true,
-                nim: true,
-                nidn: true,
-                isVerified: true,
-                createdAt: true,
-                updatedAt: true
-            }
-        });
-
-        if (!user) {
-            return res.status(404).json({ 
-                success: false, 
-                message: 'User tidak ditemukan' 
-            });
-        }
-
-        res.json({ success: true, user });
-    } catch (error) {
-        console.error('[USERS] GET /:id Error:', error);
-        res.status(500).json({ 
-            success: false, 
-            message: 'Gagal mengambil data user' 
-        });
-    }
-});
-
-module.exports = router;
+        //
