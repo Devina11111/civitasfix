@@ -3,6 +3,7 @@ const { PrismaClient } = require('@prisma/client');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const { authenticate } = require('../middleware/auth'); // Gunakan middleware yang benar
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -11,7 +12,6 @@ const prisma = new PrismaClient();
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
         const uploadDir = 'uploads/';
-        // Buat direktori jika belum ada
         if (!fs.existsSync(uploadDir)) {
             fs.mkdirSync(uploadDir, { recursive: true });
         }
@@ -25,11 +25,8 @@ const storage = multer.diskStorage({
 
 const upload = multer({
     storage: storage,
-    limits: {
-        fileSize: 5 * 1024 * 1024 // 5MB limit
-    },
+    limits: { fileSize: 5 * 1024 * 1024 },
     fileFilter: function (req, file, cb) {
-        // Hanya terima file gambar
         if (file.mimetype.startsWith('image/')) {
             cb(null, true);
         } else {
@@ -38,32 +35,7 @@ const upload = multer({
     }
 });
 
-// Middleware untuk autentikasi
-const authenticate = async (req, res, next) => {
-    try {
-        const token = req.headers.authorization?.replace('Bearer ', '');
-        
-        if (!token) {
-            return res.status(401).json({ 
-                success: false, 
-                message: 'Token tidak ditemukan' 
-            });
-        }
-
-        const jwt = require('jsonwebtoken');
-        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'civitasfix-secret-key');
-        req.userId = decoded.userId;
-        next();
-    } catch (error) {
-        console.error('Auth error:', error);
-        res.status(401).json({ 
-            success: false, 
-            message: 'Token tidak valid' 
-        });
-    }
-};
-
-// Get all reports (with pagination and filters)
+// GET all reports dengan pagination dan filter
 router.get('/', authenticate, async (req, res) => {
     try {
         const { page = 1, limit = 10, status, category } = req.query;
@@ -71,16 +43,11 @@ router.get('/', authenticate, async (req, res) => {
 
         let where = {};
 
-        // Get user role
-        const user = await prisma.user.findUnique({
-            where: { id: req.userId }
-        });
-
-        if (user.role === 'STUDENT') {
-            where.userId = req.userId;
+        // Perbaikan: Gunakan req.user dari middleware
+        if (req.user.role === 'STUDENT') {
+            where.userId = req.user.id;
         }
 
-        // Additional filters
         if (status) where.status = status;
         if (category) where.category = category;
 
@@ -89,17 +56,10 @@ router.get('/', authenticate, async (req, res) => {
                 where,
                 include: {
                     user: {
-                        select: {
-                            id: true,
-                            name: true,
-                            email: true,
-                            role: true
-                        }
+                        select: { id: true, name: true, email: true, role: true }
                     }
                 },
-                orderBy: {
-                    createdAt: 'desc'
-                },
+                orderBy: { createdAt: 'desc' },
                 skip,
                 take: parseInt(limit)
             }),
@@ -118,23 +78,54 @@ router.get('/', authenticate, async (req, res) => {
         });
     } catch (error) {
         console.error('Get reports error:', error);
-        res.status(500).json({ success: false, message: 'Internal server error' });
+        res.status(500).json({ 
+            success: false, 
+            message: 'Internal server error',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
     }
 });
 
-// Get report by ID
+// GET latest reports for dashboard
+router.get('/dashboard/latest', authenticate, async (req, res) => {
+    try {
+        let where = {};
+
+        // Perbaikan: Gunakan req.user dari middleware
+        if (req.user.role === 'STUDENT') {
+            where.userId = req.user.id;
+        }
+
+        const reports = await prisma.report.findMany({
+            where,
+            include: {
+                user: {
+                    select: { id: true, name: true, email: true, role: true }
+                }
+            },
+            orderBy: { createdAt: 'desc' },
+            take: 10
+        });
+
+        res.json({ success: true, reports });
+    } catch (error) {
+        console.error('Get latest reports error:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Internal server error',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+});
+
+// GET report by ID
 router.get('/:id', authenticate, async (req, res) => {
     try {
         const report = await prisma.report.findUnique({
             where: { id: parseInt(req.params.id) },
             include: {
                 user: {
-                    select: {
-                        id: true,
-                        name: true,
-                        email: true,
-                        role: true
-                    }
+                    select: { id: true, name: true, email: true, role: true }
                 }
             }
         });
@@ -143,24 +134,23 @@ router.get('/:id', authenticate, async (req, res) => {
             return res.status(404).json({ success: false, message: 'Laporan tidak ditemukan' });
         }
 
-        // Get user role
-        const user = await prisma.user.findUnique({
-            where: { id: req.userId }
-        });
-
         // Check permissions
-        if (user.role === 'STUDENT' && report.userId !== req.userId) {
+        if (req.user.role === 'STUDENT' && report.userId !== req.user.id) {
             return res.status(403).json({ success: false, message: 'Akses ditolak' });
         }
 
         res.json({ success: true, report });
     } catch (error) {
         console.error('Get report error:', error);
-        res.status(500).json({ success: false, message: 'Internal server error' });
+        res.status(500).json({ 
+            success: false, 
+            message: 'Internal server error',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
     }
 });
 
-// Create report dengan upload gambar (Student only)
+// CREATE report dengan upload gambar
 router.post('/', authenticate, upload.single('image'), async (req, res) => {
     try {
         const { title, description, location, category, priority } = req.body;
@@ -169,18 +159,13 @@ router.post('/', authenticate, upload.single('image'), async (req, res) => {
             return res.status(400).json({ success: false, message: 'Judul, deskripsi, dan lokasi harus diisi' });
         }
 
-        // Check user role
-        const user = await prisma.user.findUnique({
-            where: { id: req.userId }
-        });
-
-        if (user.role !== 'STUDENT') {
+        // Hanya student yang bisa membuat laporan
+        if (req.user.role !== 'STUDENT') {
             return res.status(403).json({ success: false, message: 'Hanya mahasiswa yang dapat membuat laporan' });
         }
 
         let imageUrl = null;
         if (req.file) {
-            // Simpan URL gambar (relatif)
             imageUrl = `/uploads/${req.file.filename}`;
         }
 
@@ -192,15 +177,11 @@ router.post('/', authenticate, upload.single('image'), async (req, res) => {
                 category: category || 'OTHER',
                 priority: priority || 'MEDIUM',
                 imageUrl,
-                userId: req.userId
+                userId: req.user.id
             },
             include: {
                 user: {
-                    select: {
-                        id: true,
-                        name: true,
-                        email: true
-                    }
+                    select: { id: true, name: true, email: true }
                 }
             }
         });
@@ -208,7 +189,7 @@ router.post('/', authenticate, upload.single('image'), async (req, res) => {
         // Buat notifikasi untuk user
         await prisma.notification.create({
             data: {
-                userId: req.userId,
+                userId: req.user.id,
                 title: 'Laporan Dibuat',
                 message: `Laporan "${title}" berhasil dibuat dan sedang menunggu konfirmasi.`,
                 type: 'SUCCESS',
@@ -216,7 +197,7 @@ router.post('/', authenticate, upload.single('image'), async (req, res) => {
             }
         });
 
-        // Buat notifikasi untuk dosen jika ada
+        // Buat notifikasi untuk dosen
         const lecturers = await prisma.user.findMany({
             where: { role: 'LECTURER' }
         });
@@ -226,7 +207,7 @@ router.post('/', authenticate, upload.single('image'), async (req, res) => {
                 data: {
                     userId: lecturer.id,
                     title: 'Laporan Baru',
-                    message: `Mahasiswa ${user.name} membuat laporan baru: "${title}".`,
+                    message: `Mahasiswa ${req.user.name} membuat laporan baru: "${title}".`,
                     type: 'INFO',
                     link: `/reports/${report.id}`
                 }
@@ -248,22 +229,22 @@ router.post('/', authenticate, upload.single('image'), async (req, res) => {
             });
         }
 
-        res.status(500).json({ success: false, message: 'Internal server error' });
+        res.status(500).json({ 
+            success: false, 
+            message: 'Internal server error',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
     }
 });
 
-// Update report status (Lecturer/Admin only)
+// UPDATE report status
 router.patch('/:id/status', authenticate, async (req, res) => {
     try {
         const { status } = req.body;
         const reportId = parseInt(req.params.id);
 
-        // Check user role
-        const user = await prisma.user.findUnique({
-            where: { id: req.userId }
-        });
-
-        if (!['LECTURER', 'ADMIN'].includes(user.role)) {
+        // Hanya dosen atau admin yang bisa mengubah status
+        if (!['LECTURER', 'ADMIN'].includes(req.user.role)) {
             return res.status(403).json({ success: false, message: 'Hanya dosen atau admin yang dapat mengubah status' });
         }
 
@@ -275,13 +256,12 @@ router.patch('/:id/status', authenticate, async (req, res) => {
             return res.status(404).json({ success: false, message: 'Laporan tidak ditemukan' });
         }
 
-        // Update report status
         const updatedReport = await prisma.report.update({
             where: { id: reportId },
             data: { status }
         });
 
-        // Create notification for student
+        // Buat notifikasi untuk student
         await prisma.notification.create({
             data: {
                 userId: report.userId,
@@ -300,22 +280,22 @@ router.patch('/:id/status', authenticate, async (req, res) => {
         });
     } catch (error) {
         console.error('Update report error:', error);
-        res.status(500).json({ success: false, message: 'Internal server error' });
+        res.status(500).json({ 
+            success: false, 
+            message: 'Internal server error',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
     }
 });
 
-// Update repair notes (Lecturer only)
+// UPDATE repair notes
 router.patch('/:id/repair', authenticate, async (req, res) => {
     try {
         const { repairNotes, estimatedCost } = req.body;
         const reportId = parseInt(req.params.id);
 
-        // Check user role
-        const user = await prisma.user.findUnique({
-            where: { id: req.userId }
-        });
-
-        if (user.role !== 'LECTURER') {
+        // Hanya dosen yang bisa menambahkan catatan perbaikan
+        if (req.user.role !== 'LECTURER') {
             return res.status(403).json({ success: false, message: 'Hanya dosen yang dapat menambahkan catatan perbaikan' });
         }
 
@@ -329,14 +309,14 @@ router.patch('/:id/repair', authenticate, async (req, res) => {
 
         const updateData = {};
         if (repairNotes !== undefined) updateData.repairNotes = repairNotes;
-        if (estimatedCost !== undefined) updateData.estimatedCost = estimatedCost;
+        if (estimatedCost !== undefined) updateData.estimatedCost = parseFloat(estimatedCost);
 
         const updatedReport = await prisma.report.update({
             where: { id: reportId },
             data: updateData
         });
 
-        // Create notification for student
+        // Buat notifikasi untuk student
         await prisma.notification.create({
             data: {
                 userId: report.userId,
@@ -355,46 +335,11 @@ router.patch('/:id/repair', authenticate, async (req, res) => {
         });
     } catch (error) {
         console.error('Update repair error:', error);
-        res.status(500).json({ success: false, message: 'Internal server error' });
-    }
-});
-
-// Get latest reports for dashboard
-router.get('/dashboard/latest', authenticate, async (req, res) => {
-    try {
-        let where = {};
-
-        // Check user role
-        const user = await prisma.user.findUnique({
-            where: { id: req.userId }
+        res.status(500).json({ 
+            success: false, 
+            message: 'Internal server error',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
-
-        if (user.role === 'STUDENT') {
-            where.userId = req.userId;
-        }
-
-        const reports = await prisma.report.findMany({
-            where,
-            include: {
-                user: {
-                    select: {
-                        id: true,
-                        name: true,
-                        email: true,
-                        role: true
-                    }
-                }
-            },
-            orderBy: {
-                createdAt: 'desc'
-            },
-            take: 10
-        });
-
-        res.json({ success: true, reports });
-    } catch (error) {
-        console.error('Get latest reports error:', error);
-        res.status(500).json({ success: false, message: 'Internal server error' });
     }
 });
 
