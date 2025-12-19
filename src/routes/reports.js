@@ -11,7 +11,7 @@ const prisma = new PrismaClient();
 // Setup multer untuk upload file
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
-        const uploadDir = 'uploads/';
+        const uploadDir = path.join(__dirname, '../../uploads');
         if (!fs.existsSync(uploadDir)) {
             fs.mkdirSync(uploadDir, { recursive: true });
         }
@@ -44,34 +44,28 @@ const upload = multer({
 const getImageUrl = (filename) => {
     if (!filename) return null;
     
-    // Jika sudah URL lengkap, kembalikan langsung
     if (filename.startsWith('http')) return filename;
     
-    // Jika hanya nama file, tambahkan base URL
-    const baseUrl = process.env.API_URL || 'https://civitasfix-backend.up.railway.app';
+    const baseUrl = process.env.API_BASE_URL || `https://${req.headers.host}`;
     
-    // Cek apakah filename sudah mengandung path uploads
-    if (filename.includes('uploads/')) {
+    // Pastikan path uploads benar
+    if (filename.startsWith('uploads/')) {
         return `${baseUrl}/${filename}`;
     }
     
     return `${baseUrl}/uploads/${filename}`;
 };
 
-// GET all reports dengan pagination dan filter
+// GET all reports
 router.get('/', authenticate, async (req, res) => {
     try {
-        console.log('[REPORTS] GET / - User:', req.user.email);
-        
         const { page = 1, limit = 10, status, category } = req.query;
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
         let where = {};
-
         if (req.user.role === 'STUDENT') {
             where.userId = req.user.id;
         }
-
         if (status && status !== '') where.status = status;
         if (category && category !== '') where.category = category;
 
@@ -80,12 +74,7 @@ router.get('/', authenticate, async (req, res) => {
                 where,
                 include: {
                     user: {
-                        select: {
-                            id: true,
-                            name: true,
-                            email: true,
-                            role: true
-                        }
+                        select: { id: true, name: true, email: true, role: true }
                     }
                 },
                 orderBy: { createdAt: 'desc' },
@@ -95,7 +84,6 @@ router.get('/', authenticate, async (req, res) => {
             prisma.report.count({ where })
         ]);
 
-        // Transform reports untuk menambahkan URL gambar yang benar
         const transformedReports = reports.map(report => ({
             ...report,
             imageUrl: getImageUrl(report.imageUrl)
@@ -112,76 +100,23 @@ router.get('/', authenticate, async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('[REPORTS] Error in GET /:', error);
+        console.error('[REPORTS] GET / Error:', error);
         res.status(500).json({ 
             success: false, 
-            message: 'Internal server error'
+            message: 'Internal server error' 
         });
     }
 });
 
-// GET latest reports for dashboard
-router.get('/dashboard/latest', authenticate, async (req, res) => {
-    try {
-        console.log('[REPORTS] GET /dashboard/latest - User:', req.user.email);
-        
-        let where = {};
-
-        if (req.user.role === 'STUDENT') {
-            where.userId = req.user.id;
-        }
-
-        const reports = await prisma.report.findMany({
-            where,
-            include: {
-                user: {
-                    select: {
-                        id: true,
-                        name: true,
-                        email: true,
-                        role: true
-                    }
-                }
-            },
-            orderBy: { createdAt: 'desc' },
-            take: 10
-        });
-
-        // Transform reports untuk menambahkan URL gambar yang benar
-        const transformedReports = reports.map(report => ({
-            ...report,
-            imageUrl: getImageUrl(report.imageUrl)
-        }));
-
-        res.json({
-            success: true,
-            reports: transformedReports
-        });
-    } catch (error) {
-        console.error('[REPORTS] Error in GET /dashboard/latest:', error);
-        res.status(500).json({ 
-            success: false, 
-            message: 'Internal server error'
-        });
-    }
-});
-
-// GET report by ID
+// GET single report
 router.get('/:id', authenticate, async (req, res) => {
     try {
         const reportId = parseInt(req.params.id);
-        console.log(`[REPORTS] GET /${reportId} - User:`, req.user.email);
-
         const report = await prisma.report.findUnique({
             where: { id: reportId },
             include: {
                 user: {
-                    select: {
-                        id: true,
-                        name: true,
-                        email: true,
-                        role: true
-                    }
+                    select: { id: true, name: true, email: true, role: true }
                 }
             }
         });
@@ -193,7 +128,6 @@ router.get('/:id', authenticate, async (req, res) => {
             });
         }
 
-        // Check permissions
         if (req.user.role === 'STUDENT' && report.userId !== req.user.id) {
             return res.status(403).json({ 
                 success: false, 
@@ -201,30 +135,25 @@ router.get('/:id', authenticate, async (req, res) => {
             });
         }
 
-        // Transform report untuk menambahkan URL gambar yang benar
-        const transformedReport = {
-            ...report,
-            imageUrl: getImageUrl(report.imageUrl)
-        };
-
         res.json({ 
             success: true, 
-            report: transformedReport
+            report: {
+                ...report,
+                imageUrl: getImageUrl(report.imageUrl)
+            }
         });
     } catch (error) {
-        console.error('[REPORTS] Error in GET /:id:', error);
+        console.error('[REPORTS] GET /:id Error:', error);
         res.status(500).json({ 
             success: false, 
-            message: 'Internal server error'
+            message: 'Internal server error' 
         });
     }
 });
 
-// CREATE report dengan upload gambar
+// CREATE report
 router.post('/', authenticate, upload.single('image'), async (req, res) => {
     try {
-        console.log('[REPORTS] POST / - User:', req.user.email);
-        
         const { title, description, location, category, priority } = req.body;
 
         if (!title || !description || !location) {
@@ -244,7 +173,6 @@ router.post('/', authenticate, upload.single('image'), async (req, res) => {
         let imageFilename = null;
         if (req.file) {
             imageFilename = req.file.filename;
-            console.log('[REPORTS] File uploaded:', imageFilename);
         }
 
         const report = await prisma.report.create({
@@ -254,36 +182,26 @@ router.post('/', authenticate, upload.single('image'), async (req, res) => {
                 location: location.trim(),
                 category: category || 'OTHER',
                 priority: priority || 'MEDIUM',
-                imageUrl: imageFilename, // Simpan hanya nama file
+                imageUrl: imageFilename,
                 userId: req.user.id
             },
             include: {
                 user: {
-                    select: {
-                        id: true,
-                        name: true,
-                        email: true
-                    }
+                    select: { id: true, name: true, email: true }
                 }
             }
         });
 
-        // Transform report untuk menambahkan URL gambar yang benar
-        const transformedReport = {
-            ...report,
-            imageUrl: getImageUrl(report.imageUrl)
-        };
-
-        console.log('[REPORTS] Report created successfully:', report.id);
-
         res.status(201).json({
             success: true,
             message: 'Laporan berhasil dibuat',
-            report: transformedReport
+            report: {
+                ...report,
+                imageUrl: getImageUrl(report.imageUrl)
+            }
         });
     } catch (error) {
-        console.error('[REPORTS] Error in POST /:', error);
-        console.error('[REPORTS] Error stack:', error.stack);
+        console.error('[REPORTS] POST / Error:', error);
         
         if (req.file && req.file.path) {
             fs.unlink(req.file.path, (err) => {
@@ -293,12 +211,12 @@ router.post('/', authenticate, upload.single('image'), async (req, res) => {
 
         res.status(500).json({ 
             success: false, 
-            message: 'Internal server error'
+            message: 'Gagal membuat laporan' 
         });
     }
 });
 
-// UPDATE report status (Lecturer/Admin only)
+// UPDATE report status
 router.patch('/:id/status', authenticate, async (req, res) => {
     try {
         const { status } = req.body;
@@ -308,6 +226,14 @@ router.patch('/:id/status', authenticate, async (req, res) => {
             return res.status(403).json({ 
                 success: false, 
                 message: 'Hanya dosen atau admin yang dapat mengubah status' 
+            });
+        }
+
+        const validStatuses = ['PENDING', 'CONFIRMED', 'IN_PROGRESS', 'COMPLETED', 'REJECTED'];
+        if (!status || !validStatuses.includes(status)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Status tidak valid'
             });
         }
 
@@ -327,22 +253,16 @@ router.patch('/:id/status', authenticate, async (req, res) => {
             data: { status }
         });
 
-        // Transform report untuk menambahkan URL gambar yang benar
-        const transformedReport = {
-            ...updatedReport,
-            imageUrl: getImageUrl(updatedReport.imageUrl)
-        };
-
         res.json({
             success: true,
             message: 'Status laporan berhasil diperbarui',
-            report: transformedReport
+            report: updatedReport
         });
     } catch (error) {
-        console.error('[REPORTS] Update report error:', error);
+        console.error('[REPORTS] PATCH /:id/status Error:', error);
         res.status(500).json({ 
             success: false, 
-            message: 'Internal server error'
+            message: 'Gagal memperbarui status laporan' 
         });
     }
 });
