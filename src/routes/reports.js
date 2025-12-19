@@ -40,19 +40,28 @@ const upload = multer({
     }
 });
 
-// Fungsi untuk mendapatkan URL gambar yang benar
-const getImageUrl = (filename) => {
+// Fungsi untuk mendapatkan URL gambar yang benar - FIXED
+const getImageUrl = (filename, req = null) => {
     if (!filename) return null;
     
+    // Jika sudah URL lengkap
     if (filename.startsWith('http')) return filename;
     
-    const baseUrl = process.env.API_BASE_URL || `https://${req.headers.host}`;
+    // Gunakan base URL dari environment atau dari request
+    let baseUrl = process.env.API_BASE_URL || 'https://civitasfix-backend.up.railway.app';
     
-    // Pastikan path uploads benar
-    if (filename.startsWith('uploads/')) {
-        return `${baseUrl}/${filename}`;
+    if (req) {
+        baseUrl = `${req.protocol}://${req.get('host')}`;
     }
     
+    // Jika filename sudah mengandung uploads/, sesuaikan
+    if (filename.includes('uploads/')) {
+        // Cek apakah sudah ada awalan /
+        const cleanPath = filename.startsWith('/') ? filename : `/${filename}`;
+        return `${baseUrl}${cleanPath}`;
+    }
+    
+    // Default: tambahkan /uploads/
     return `${baseUrl}/uploads/${filename}`;
 };
 
@@ -86,7 +95,7 @@ router.get('/', authenticate, async (req, res) => {
 
         const transformedReports = reports.map(report => ({
             ...report,
-            imageUrl: getImageUrl(report.imageUrl)
+            imageUrl: getImageUrl(report.imageUrl, req)
         }));
 
         res.json({
@@ -101,6 +110,43 @@ router.get('/', authenticate, async (req, res) => {
         });
     } catch (error) {
         console.error('[REPORTS] GET / Error:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Internal server error' 
+        });
+    }
+});
+
+// GET latest reports for dashboard - NEW ENDPOINT
+router.get('/dashboard/latest', authenticate, async (req, res) => {
+    try {
+        let where = {};
+        if (req.user.role === 'STUDENT') {
+            where.userId = req.user.id;
+        }
+
+        const reports = await prisma.report.findMany({
+            where,
+            include: {
+                user: {
+                    select: { id: true, name: true, email: true, role: true }
+                }
+            },
+            orderBy: { createdAt: 'desc' },
+            take: 5
+        });
+
+        const transformedReports = reports.map(report => ({
+            ...report,
+            imageUrl: getImageUrl(report.imageUrl, req)
+        }));
+
+        res.json({
+            success: true,
+            reports: transformedReports
+        });
+    } catch (error) {
+        console.error('[REPORTS] GET /dashboard/latest Error:', error);
         res.status(500).json({ 
             success: false, 
             message: 'Internal server error' 
@@ -139,7 +185,7 @@ router.get('/:id', authenticate, async (req, res) => {
             success: true, 
             report: {
                 ...report,
-                imageUrl: getImageUrl(report.imageUrl)
+                imageUrl: getImageUrl(report.imageUrl, req)
             }
         });
     } catch (error) {
@@ -172,6 +218,7 @@ router.post('/', authenticate, upload.single('image'), async (req, res) => {
 
         let imageFilename = null;
         if (req.file) {
+            // Simpan hanya nama file, path relatif nanti dibangun di getImageUrl
             imageFilename = req.file.filename;
         }
 
@@ -192,12 +239,38 @@ router.post('/', authenticate, upload.single('image'), async (req, res) => {
             }
         });
 
+        // Buat notifikasi untuk admin/dosen tentang laporan baru
+        if (['LECTURER', 'ADMIN'].includes(req.user.role)) {
+            // Admin/Lecturer tidak perlu notifikasi untuk laporan mereka sendiri
+        } else {
+            // Cari semua admin dan lecturer
+            const adminsLecturers = await prisma.user.findMany({
+                where: {
+                    role: { in: ['ADMIN', 'LECTURER'] }
+                }
+            });
+
+            // Buat notifikasi untuk setiap admin/lecturer
+            for (const user of adminsLecturers) {
+                await prisma.notification.create({
+                    data: {
+                        userId: user.id,
+                        title: 'Laporan Baru',
+                        message: `Laporan baru dibuat oleh ${req.user.name}: ${title}`,
+                        type: 'INFO',
+                        link: `/reports/${report.id}`,
+                        reportId: report.id
+                    }
+                });
+            }
+        }
+
         res.status(201).json({
             success: true,
             message: 'Laporan berhasil dibuat',
             report: {
                 ...report,
-                imageUrl: getImageUrl(report.imageUrl)
+                imageUrl: getImageUrl(report.imageUrl, req)
             }
         });
     } catch (error) {
@@ -238,7 +311,10 @@ router.patch('/:id/status', authenticate, async (req, res) => {
         }
 
         const report = await prisma.report.findUnique({
-            where: { id: reportId }
+            where: { id: reportId },
+            include: {
+                user: true
+            }
         });
 
         if (!report) {
@@ -251,6 +327,18 @@ router.patch('/:id/status', authenticate, async (req, res) => {
         const updatedReport = await prisma.report.update({
             where: { id: reportId },
             data: { status }
+        });
+
+        // Buat notifikasi untuk user yang melaporkan
+        await prisma.notification.create({
+            data: {
+                userId: report.userId,
+                title: 'Status Laporan Diperbarui',
+                message: `Laporan Anda "${report.title}" telah diubah statusnya menjadi ${status}`,
+                type: 'INFO',
+                link: `/reports/${report.id}`,
+                reportId: report.id
+            }
         });
 
         res.json({
