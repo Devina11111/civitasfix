@@ -35,6 +35,18 @@ const upload = multer({
     }
 });
 
+// Fungsi untuk mendapatkan URL gambar yang benar
+const getImageUrl = (filename) => {
+    if (!filename) return null;
+    
+    // Jika sudah URL lengkap, kembalikan langsung
+    if (filename.startsWith('http')) return filename;
+    
+    // Untuk Railway, gunakan URL backend + /uploads/
+    const baseUrl = process.env.API_URL || 'https://civitasfix-backend.up.railway.app';
+    return `${baseUrl}/uploads/${filename}`;
+};
+
 // GET all reports dengan pagination dan filter
 router.get('/', authenticate, async (req, res) => {
     try {
@@ -72,9 +84,15 @@ router.get('/', authenticate, async (req, res) => {
             prisma.report.count({ where })
         ]);
 
+        // Transform reports untuk menambahkan URL gambar yang benar
+        const transformedReports = reports.map(report => ({
+            ...report,
+            imageUrl: getImageUrl(report.imageUrl)
+        }));
+
         res.json({
             success: true,
-            reports,
+            reports: transformedReports,
             pagination: {
                 page: parseInt(page),
                 limit: parseInt(limit),
@@ -119,9 +137,15 @@ router.get('/dashboard/latest', authenticate, async (req, res) => {
             take: 10
         });
 
+        // Transform reports untuk menambahkan URL gambar yang benar
+        const transformedReports = reports.map(report => ({
+            ...report,
+            imageUrl: getImageUrl(report.imageUrl)
+        }));
+
         res.json({
             success: true,
-            reports
+            reports: transformedReports
         });
     } catch (error) {
         console.error('[REPORTS] Error in GET /dashboard/latest:', error);
@@ -168,9 +192,15 @@ router.get('/:id', authenticate, async (req, res) => {
             });
         }
 
+        // Transform report untuk menambahkan URL gambar yang benar
+        const transformedReport = {
+            ...report,
+            imageUrl: getImageUrl(report.imageUrl)
+        };
+
         res.json({ 
             success: true, 
-            report
+            report: transformedReport
         });
     } catch (error) {
         console.error('[REPORTS] Error in GET /:id:', error);
@@ -186,6 +216,7 @@ router.get('/:id', authenticate, async (req, res) => {
 router.post('/', authenticate, upload.single('image'), async (req, res) => {
     try {
         console.log('[REPORTS] POST / - User:', req.user.email);
+        console.log('[REPORTS] File uploaded:', req.file);
         
         const { title, description, location, category, priority } = req.body;
 
@@ -203,9 +234,9 @@ router.post('/', authenticate, upload.single('image'), async (req, res) => {
             });
         }
 
-        let imageUrl = null;
+        let imageFilename = null;
         if (req.file) {
-            imageUrl = `/uploads/${req.file.filename}`;
+            imageFilename = req.file.filename;
         }
 
         const report = await prisma.report.create({
@@ -215,7 +246,7 @@ router.post('/', authenticate, upload.single('image'), async (req, res) => {
                 location: location.trim(),
                 category: category || 'OTHER',
                 priority: priority || 'MEDIUM',
-                imageUrl,
+                imageUrl: imageFilename, // Simpan hanya nama file
                 userId: req.user.id
             },
             include: {
@@ -229,15 +260,22 @@ router.post('/', authenticate, upload.single('image'), async (req, res) => {
             }
         });
 
+        // Transform report untuk menambahkan URL gambar yang benar
+        const transformedReport = {
+            ...report,
+            imageUrl: getImageUrl(report.imageUrl)
+        };
+
         console.log('[REPORTS] Report created successfully:', report.id);
 
         res.status(201).json({
             success: true,
             message: 'Laporan berhasil dibuat',
-            report
+            report: transformedReport
         });
     } catch (error) {
         console.error('[REPORTS] Error in POST /:', error);
+        console.error('[REPORTS] Error stack:', error.stack);
         
         if (req.file && req.file.path) {
             fs.unlink(req.file.path, (err) => {
@@ -282,10 +320,16 @@ router.patch('/:id/status', authenticate, async (req, res) => {
             data: { status }
         });
 
+        // Transform report untuk menambahkan URL gambar yang benar
+        const transformedReport = {
+            ...updatedReport,
+            imageUrl: getImageUrl(updatedReport.imageUrl)
+        };
+
         res.json({
             success: true,
             message: 'Status laporan berhasil diperbarui',
-            report: updatedReport
+            report: transformedReport
         });
     } catch (error) {
         console.error('[REPORTS] Update report error:', error);
